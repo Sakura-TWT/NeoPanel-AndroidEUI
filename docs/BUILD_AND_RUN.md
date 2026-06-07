@@ -100,7 +100,7 @@ Machine: AArch64
 ls build/android
 ```
 
-目录中不应出现 `picture/` 或 `libc++_shared.so`。头像和字体已经嵌入 ELF，C++ STL 使用静态链接。
+头像和字体已经嵌入 ELF，C++ STL 使用静态链接。
 
 ## 推送到设备
 
