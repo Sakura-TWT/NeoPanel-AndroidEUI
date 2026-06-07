@@ -58,6 +58,7 @@ struct StarRenderTexture {
     int width = 0;
     int height = 0;
     bool baseReady = false;
+    int drawHoldFrames = 0;
     float shadedYaw = 1000.0f;
     float shadedPitch = 1000.0f;
     float shadedPhase = -1000.0f;
@@ -1191,7 +1192,7 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
         return;
     }
 
-    const core::Vec3 light = normalize3({-0.40f + yaw * 0.40f, -0.62f - pitch * 0.24f, 0.92f});
+    const core::Vec3 light = normalize3({-0.34f + yaw * 0.34f, -0.58f - pitch * 0.20f, 0.96f});
     const core::Vec3 view = {0.0f, 0.0f, 1.0f};
     const core::Vec3 halfVector = normalize3({light.x + view.x, light.y + view.y, light.z + view.z});
     const float pressGlow = pressed ? 1.0f : 0.0f;
@@ -1203,9 +1204,9 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
             const float alpha = texture.alpha[index];
             const float glow = texture.glow[index];
             if (alpha <= 0.001f && glow <= 0.001f) {
-                texture.pixels[pixel + 0] = 0u;
-                texture.pixels[pixel + 1] = 0u;
-                texture.pixels[pixel + 2] = 0u;
+                texture.pixels[pixel + 0] = 232u;
+                texture.pixels[pixel + 1] = 228u;
+                texture.pixels[pixel + 2] = 255u;
                 texture.pixels[pixel + 3] = 0u;
                 continue;
             }
@@ -1226,8 +1227,8 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
                                              (v + 0.36f + pitch * 0.08f) * (v + 0.36f + pitch * 0.08f) * 18.0f));
             const float pearlescent = 0.5f + 0.5f * std::sin((u - v) * 5.0f + phase * 0.72f);
             const float fold = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (std::atan2(v, u) + kPi * 0.5f))), 4.0f);
-            const float shade = 0.64f + diffuse * 0.40f + broad * 0.22f + spec * 0.62f + diagonal * 0.12f + topFlash * 0.26f + fold * 0.08f;
-            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.6f) * 0.24f + edgeTint * 0.18f;
+            const float shade = 0.70f + diffuse * 0.32f + broad * 0.18f + spec * 0.52f + diagonal * 0.055f + topFlash * 0.24f + fold * 0.045f;
+            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.8f) * 0.18f + edgeTint * 0.12f;
             const float warmth = 0.36f + 0.22f * pearlescent + yaw * 0.10f;
 
             float r = 0.75f + shade * 0.24f + rim * 0.19f + topFlash * 0.16f;
@@ -1237,10 +1238,10 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
             g += (1.0f - warmth) * 0.05f + pressGlow * 0.018f;
             b += 0.05f + pressGlow * 0.020f;
 
-            const float shadow = smoothstep(-0.12f, 0.72f, v + pitch * 0.20f) * (0.18f + edgeTint * 0.16f);
-            r -= shadow * 0.20f;
-            g -= shadow * 0.18f;
-            b -= shadow * 0.11f;
+            const float shadow = smoothstep(-0.08f, 0.74f, v + pitch * 0.18f) * (0.105f + edgeTint * 0.070f);
+            r -= shadow * 0.12f;
+            g -= shadow * 0.10f;
+            b -= shadow * 0.060f;
 
             if (alpha <= 0.001f) {
                 texture.pixels[pixel + 0] = byteFromFloat(0.72f + 0.10f * pearlescent);
@@ -1259,6 +1260,9 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
 
     if (texture.handle == nullptr) {
         texture.handle = backend->createTexture(texture.pixels.data(), texture.width, texture.height);
+        if (texture.handle != nullptr) {
+            texture.drawHoldFrames = 1;
+        }
     } else {
         backend->updateTexture(texture.handle, texture.pixels.data(), texture.width, texture.height);
     }
@@ -2284,19 +2288,28 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
              rgba(1.0f, 1.0f, 1.0f, 0.032f * opacity),
              {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.044f * opacity)});
     drawStarGlowArc(visual.x, visual.y, visual.width, visual.height, state.starYaw, state.starPitch, opacity);
-    drawRect(stage.x + 30.0f, stage.y + stage.height - 54.0f, stage.width - 60.0f, 9.0f, 4.5f,
-             rgba(1.0f, 1.0f, 1.0f, 0.11f * opacity), {}, {}, {}, opacity, 13.0f);
-    drawRect(visual.x + 36.0f + state.starYaw * 18.0f,
-             visual.y + visual.height - 18.0f - state.starPitch * 12.0f,
-             visual.width - 72.0f,
-             18.0f,
-             9.0f,
-             rgba(0.16f, 0.10f, 0.26f, 0.30f * opacity),
+    drawRect(stage.x + 50.0f,
+             stage.y + stage.height - 55.0f,
+             stage.width - 100.0f,
+             5.0f,
+             2.5f,
+             rgba(0.90f, 0.76f, 1.0f, 0.055f * opacity),
              {},
              {},
              {},
              opacity,
-             18.0f);
+             12.0f);
+    drawRect(visual.x + 54.0f + state.starYaw * 9.0f,
+             visual.y + visual.height - 25.0f - state.starPitch * 7.0f,
+             visual.width - 108.0f,
+             12.0f,
+             6.0f,
+             rgba(0.88f, 0.72f, 1.0f, 0.075f * opacity),
+             {},
+             {},
+             {},
+             opacity,
+             16.0f);
 
     for (int i = 0; i < 18; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
@@ -2313,6 +2326,7 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     }
 
     shadePremiumStar(state.starTexture, state.starPitch, state.starYaw, state.launchTime, state.pressedStar);
+    const bool starTextureReady = state.starTexture.handle != nullptr && state.starTexture.drawHoldFrames <= 0;
 
     core::Transform transform;
     transform.origin = {0.5f, 0.5f};
@@ -2324,30 +2338,35 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     transform.perspective = 560.0f;
     transform.scale = {1.015f + pressed * 0.030f, 1.015f + pressed * 0.030f};
 
-    core::Transform sideTransform = transform;
-    sideTransform.translate.x += 6.0f - state.starYaw * 10.0f;
-    sideTransform.translate.y += 8.0f - state.starPitch * 6.0f;
-    sideTransform.translateZ -= 26.0f;
-    sideTransform.scale = {0.992f + pressed * 0.018f, 0.992f + pressed * 0.018f};
-    const core::TransformMatrix sideMatrix = matrixForTransform(visual, sideTransform);
-    drawTextureQuadMatrix(state.starTexture.handle,
-                          visual.x,
-                          visual.y,
-                          visual.width,
-                          visual.height,
-                          sideMatrix,
-                          rgba(0.68f, 0.58f, 1.0f, 0.28f * opacity),
-                          0.0f);
+    if (starTextureReady) {
+        core::Transform sideTransform = transform;
+        sideTransform.translate.x += 2.5f - state.starYaw * 4.0f;
+        sideTransform.translate.y += 3.5f - state.starPitch * 2.5f;
+        sideTransform.translateZ -= 18.0f;
+        sideTransform.scale = {0.998f + pressed * 0.010f, 0.998f + pressed * 0.010f};
+        const core::TransformMatrix sideMatrix = matrixForTransform(visual, sideTransform);
+        drawTextureQuadMatrix(state.starTexture.handle,
+                              visual.x,
+                              visual.y,
+                              visual.width,
+                              visual.height,
+                              sideMatrix,
+                              rgba(0.92f, 0.82f, 1.0f, 0.105f * opacity),
+                              0.0f);
 
-    const core::TransformMatrix matrix = matrixForTransform(visual, transform);
-    drawTextureQuadMatrix(state.starTexture.handle,
-                          visual.x,
-                          visual.y,
-                          visual.width,
-                          visual.height,
-                          matrix,
-                          rgba(1.0f, 1.0f, 1.0f, opacity),
-                          0.0f);
+        const core::TransformMatrix matrix = matrixForTransform(visual, transform);
+        drawTextureQuadMatrix(state.starTexture.handle,
+                              visual.x,
+                              visual.y,
+                              visual.width,
+                              visual.height,
+                              matrix,
+                              rgba(1.0f, 1.0f, 1.0f, opacity),
+                              0.0f);
+    }
+    if (state.starTexture.drawHoldFrames > 0) {
+        --state.starTexture.drawHoldFrames;
+    }
 
     drawStarSparkle(visual.x + visual.width * 0.35f + state.starYaw * 12.0f,
                     visual.y + visual.height * 0.27f + state.starPitch * 10.0f,
@@ -2536,6 +2555,7 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     const float demoY0 = scrollTop + 16.0f - scrollValue;
     const float motionStageY = scrollTop + 14.0f - scrollValue;
     const core::Rect starHitRect = premiumStarHitRect(contentX, contentW, motionStageY);
+    const core::Rect starVisualRect = premiumStarVisualRect(contentX, contentW, motionStageY);
 
     const core::Rect fpsTrackRect = fpsSliderRect(contentX, contentW, scrollTop);
     const core::Rect fpsRect = expandedRect(fpsTrackRect, 18.0f);
@@ -2638,10 +2658,12 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
 
     if (state.selected == 2) {
         if (pointer.down && state.capturedStar) {
-            if (!pointer.pressedThisFrame) {
-                state.starTargetYaw = std::clamp(state.starTargetYaw - static_cast<float>(pointer.deltaX) * 0.010f, -0.72f, 0.72f);
-                state.starTargetPitch = std::clamp(state.starTargetPitch - static_cast<float>(pointer.deltaY) * 0.009f, -0.58f, 0.58f);
-            }
+            const float centerX = starVisualRect.x + starVisualRect.width * 0.5f;
+            const float centerY = starVisualRect.y + starVisualRect.height * 0.5f;
+            const float relX = std::clamp(static_cast<float>(pointer.x - centerX) / (starVisualRect.width * 0.5f), -1.0f, 1.0f);
+            const float relY = std::clamp(static_cast<float>(pointer.y - centerY) / (starVisualRect.height * 0.5f), -1.0f, 1.0f);
+            state.starTargetYaw = std::clamp(kStarRestYaw + relX * 0.58f, -0.72f, 0.72f);
+            state.starTargetPitch = std::clamp(kStarRestPitch - relY * 0.52f, -0.58f, 0.58f);
             interacting = true;
         } else if (!pointer.down) {
             state.starTargetYaw = approach(state.starTargetYaw, kStarRestYaw, deltaSeconds, 1.45f);
