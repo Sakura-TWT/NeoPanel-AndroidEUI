@@ -36,7 +36,7 @@ constexpr int kGraphSamples = 56;
 constexpr float kFpsMin = 30.0f;
 constexpr float kFpsMax = 120.0f;
 constexpr float kPi = 3.14159265358979323846f;
-constexpr int kStarTextureSize = 320;
+constexpr int kStarTextureSize = 288;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
 
@@ -2265,6 +2265,42 @@ void drawStarDustStreak(float x, float y, float height, float opacity, float pha
     drawAccentDot(x, y + height * 0.22f, 1.2f, rgba(1.0f, 0.94f, 1.0f, 0.18f), opacity * shimmer);
 }
 
+void drawSafeStarGlow(float x, float y, float width, float height, float radius, const core::Color& color, float opacity) {
+    if (opacity <= 0.001f) {
+        return;
+    }
+    drawRect(x - 24.0f,
+             y - 16.0f,
+             width + 48.0f,
+             height + 32.0f,
+             radius + 18.0f,
+             rgba(color.r, color.g, color.b, color.a * 0.32f),
+             {},
+             {},
+             {},
+             opacity);
+    drawRect(x - 10.0f,
+             y - 6.0f,
+             width + 20.0f,
+             height + 12.0f,
+             radius + 8.0f,
+             rgba(color.r, color.g, color.b, color.a * 0.58f),
+             {},
+             {},
+             {},
+             opacity);
+    drawRect(x,
+             y,
+             width,
+             height,
+             radius,
+             color,
+             {},
+             {},
+             {},
+             opacity);
+}
+
 void renderPremiumStarStage(PanelState& state, float contentX, float contentW, float stageY, float opacity) {
     const core::Color accent = pageAccent(2);
     const core::Rect stage = premiumStarStageRect(contentX, contentW, stageY);
@@ -2287,48 +2323,40 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
              rgba(1.0f, 1.0f, 1.0f, 0.026f * opacity),
              {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.044f * opacity)});
 
-    drawRect(visual.x - 38.0f + state.starYaw * 10.0f,
-             visual.y + 26.0f + state.starPitch * 5.0f,
-             visual.width + 76.0f,
-             visual.height - 12.0f,
-             42.0f,
-             rgba(0.55f, 0.50f, 1.0f, (0.026f + pressed * 0.018f) * opacity),
-             {},
-             {},
-             {},
-             1.0f,
-             10.0f);
-    drawRect(visual.x + visual.width * 0.12f - state.starYaw * 8.0f,
-             visual.y + visual.height * 0.17f - state.starPitch * 8.0f,
-             visual.width * 0.74f,
-             visual.height * 0.46f,
-             38.0f,
-             rgba(1.0f, 0.82f, 0.98f, (0.018f + pulse * 0.010f) * opacity),
-             {},
-             {},
-             {},
-             1.0f,
-             8.0f);
+    drawSafeStarGlow(visual.x - 38.0f + state.starYaw * 10.0f,
+                     visual.y + 26.0f + state.starPitch * 5.0f,
+                     visual.width + 76.0f,
+                     visual.height - 12.0f,
+                     42.0f,
+                     rgba(0.55f, 0.50f, 1.0f, 0.020f + pressed * 0.012f),
+                     opacity);
+    drawSafeStarGlow(visual.x + visual.width * 0.12f - state.starYaw * 8.0f,
+                     visual.y + visual.height * 0.17f - state.starPitch * 8.0f,
+                     visual.width * 0.74f,
+                     visual.height * 0.46f,
+                     38.0f,
+                     rgba(1.0f, 0.82f, 0.98f, 0.013f + pulse * 0.007f),
+                     opacity);
 
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < 14; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
         const float px = stage.x + 38.0f + hash01(seed) * (stage.width - 76.0f);
         const float py = stage.y + 34.0f + hash01(seed + 9.0f) * (stage.height - 90.0f);
         const float shimmer = smoothstep(0.08f, 1.0f, 0.5f + 0.5f * std::sin(state.launchTime * (1.3f + hash01(seed + 4.0f) * 1.8f) + seed));
         const float size = 1.6f + hash01(seed + 2.0f) * 4.8f;
-        const float op = (0.030f + shimmer * 0.145f) * opacity;
+        const float op = (0.026f + shimmer * 0.118f) * opacity;
         drawStarSparkle(px + state.starYaw * (2.0f + hash01(seed + 5.0f) * 5.0f),
                          py - state.starPitch * (2.0f + hash01(seed + 6.0f) * 4.0f),
                          size,
                          rgba(0.98f, 0.94f + hash01(seed + 7.0f) * 0.05f, 1.0f, 0.86f),
                          op);
     }
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 6; ++i) {
         const float seed = 100.0f + static_cast<float>(i) * 13.0f;
         const float x = stage.x + 58.0f + hash01(seed) * (stage.width - 116.0f) + state.starYaw * (6.0f + hash01(seed + 1.0f) * 8.0f);
         const float y = stage.y + 36.0f + hash01(seed + 2.0f) * (stage.height - 116.0f) - state.starPitch * 6.0f;
-        const float h = 10.0f + hash01(seed + 3.0f) * 34.0f;
-        drawStarDustStreak(x, y, h, (0.14f + hash01(seed + 4.0f) * 0.20f) * opacity, state.launchTime * (0.8f + hash01(seed + 5.0f)) + seed);
+        const float h = 8.0f + hash01(seed + 3.0f) * 22.0f;
+        drawStarDustStreak(x, y, h, (0.08f + hash01(seed + 4.0f) * 0.11f) * opacity, state.launchTime * (0.55f + hash01(seed + 5.0f) * 0.45f) + seed);
     }
 
     shadePremiumStar(state.starTexture, state.starPitch, state.starYaw, state.launchTime, state.pressedStar);
