@@ -1,6 +1,6 @@
 # Android ELF 移植说明
 
-NeoPanel 的目标是把 EUI-NEO 的渲染能力放进一个 Android root ELF，而不是做成 APK。上游项目通过子模块引用：
+NeoPanel 目前更准确的定位，是 EUI-NEO 在 Android root ELF 场景下的一套移植实现。它验证的是：不做 APK、不走 Activity，也能让 EUI 的 primitive 渲染、Vulkan 后端和输入路径在 Android ELF 可执行文件中跑起来。上游项目通过子模块引用：
 
 ```text
 third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
@@ -8,7 +8,7 @@ third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
 
 ## 运行模型
 
-最终运行链路如下：
+当前运行链路如下：
 
 ```text
 Android root shell
@@ -19,7 +19,7 @@ Android root shell
   -> EUI render primitives
 ```
 
-没有 Activity、AndroidManifest、Java/Kotlin 入口和 Android View 树。程序自己负责窗口、渲染和输入。
+没有 Activity、AndroidManifest、Java/Kotlin 入口和 Android View 树。这个移植层自己负责窗口、渲染和输入。
 
 ## 为什么直接用底层 primitive
 
@@ -33,7 +33,7 @@ core::render::VulkanRenderBackend
 core::input queue/consume APIs
 ```
 
-这样可以明确控制 Surface、Vulkan、输入和资源生命周期。
+这样可以把 Surface、Vulkan、输入和资源生命周期收束在 Android ELF 移植层里。
 
 ## Surface 与坐标
 

@@ -1,8 +1,8 @@
 # NeoPanel Android ELF
 
-NeoPanel Android ELF 是一个可以从 Android root shell 直接启动的原生可执行文件。它不是 APK，也不依赖 Activity、Android View 或 Java/Kotlin 入口；程序自己创建 Android Surface，并把 `ANativeWindow` 交给 Vulkan 渲染。
+NeoPanel Android ELF 目前定位为 EUI-NEO 在 Android root ELF 环境下的移植实现和验证样例。它可以从 Android root shell 直接启动，不经过 APK、Activity、Android View 或 Java/Kotlin 入口；程序自己创建 Android Surface，并把 `ANativeWindow` 交给 Vulkan 渲染。
 
-界面层基于 EUI-NEO 的渲染 primitive 和 Vulkan 后端能力实现。上游项目以 Git submodule 形式保留在仓库中：
+界面层直接复用 EUI-NEO 的渲染 primitive 和 Vulkan 后端能力。上游项目以 Git submodule 形式保留在仓库中：
 
 ```text
 third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
@@ -57,19 +57,19 @@ git clone --recurse-submodules https://github.com/Sakura-TWT/NeoPanel-Android-EL
 git submodule update --init --recursive
 ```
 
-在 Windows 上构建：
+在 Windows 上构建时，建议先通过环境变量指定 Android NDK：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
-  -NdkRoot 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c'
+$env:ANDROID_NDK_HOME = '<Android NDK 安装目录>'
+powershell -ExecutionPolicy Bypass -File .\build_android.ps1
 ```
 
 也可以使用已有的 EUI-NEO 本地源码：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
-  -NdkRoot 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c' `
-  -EuiRoot 'D:\AndroidEUI\EUI-NEO-0.4.0'
+  -NdkRoot '<Android NDK 安装目录>' `
+  -EuiRoot '<EUI-NEO 源码目录>'
 ```
 
 更多命令见 [docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md)。

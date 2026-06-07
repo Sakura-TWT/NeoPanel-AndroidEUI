@@ -1,6 +1,6 @@
 NeoPanel Android ELF
 
-This project is an Android root ELF port and custom panel implementation built with EUI-NEO rendering concepts and primitives.
+This project is an Android root ELF port implementation for EUI-NEO rendering concepts and primitives.
 
 Upstream EUI-NEO submodule:
 

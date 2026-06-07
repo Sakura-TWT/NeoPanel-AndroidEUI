@@ -1,6 +1,6 @@
 # 构建与运行
 
-本文记录从源码构建 `neopanel_android`、验证 ELF、推送到设备运行的最短路径。
+本文记录从源码构建 `neopanel_android`、验证 ELF、推送到设备运行的通用路径。示例命令不绑定某一台开发机的本地目录。
 
 ## 准备子模块
 
@@ -26,12 +26,28 @@ git submodule update --init --recursive
 
 ## Windows 构建
 
-已验证命令：
+推荐把 Android NDK 配置到环境变量，再直接运行脚本：
+
+```powershell
+$env:ANDROID_NDK_HOME = '<Android NDK 安装目录>'
+powershell -ExecutionPolicy Bypass -File .\build_android.ps1
+```
+
+如果 CMake 或 Ninja 不在 PATH 中，可以显式传入：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
-  -NdkRoot 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c' `
-  -EuiRoot 'D:\AndroidEUI\EUI-NEO-0.4.0'
+  -NdkRoot '<Android NDK 安装目录>' `
+  -CMakePath '<cmake.exe 路径>' `
+  -NinjaPath '<ninja.exe 路径>'
+```
+
+如果不用仓库子模块，也可以指向已有的 EUI-NEO 源码目录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
+  -NdkRoot '<Android NDK 安装目录>' `
+  -EuiRoot '<EUI-NEO 源码目录>'
 ```
 
 脚本默认配置：
@@ -52,7 +68,7 @@ build/android/neopanel_android
 ## 验证 ELF
 
 ```powershell
-& 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-readelf.exe' -h build\android\neopanel_android |
+& "$env:ANDROID_NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-readelf.exe" -h build\android\neopanel_android |
   Select-String -Pattern 'Class:|Machine:|Type:'
 ```
 
@@ -96,7 +112,7 @@ git submodule update --init --recursive
 或者显式传入：
 
 ```powershell
--EuiRoot 'D:\path\to\EUI-NEO'
+-EuiRoot '<EUI-NEO 源码目录>'
 ```
 
 没有触摸响应：

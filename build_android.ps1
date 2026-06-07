@@ -11,23 +11,41 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$VsCMake = if ([string]::IsNullOrWhiteSpace($CMakePath)) { "D:\VSTool\community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" } else { $CMakePath }
-$VsNinja = if ([string]::IsNullOrWhiteSpace($NinjaPath)) { "D:\VSTool\community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe" } else { $NinjaPath }
 
-if (!(Test-Path -LiteralPath $VsCMake)) {
-    throw "cmake.exe was not found at $VsCMake"
+function Resolve-Executable {
+    param(
+        [string]$ExplicitPath,
+        [string]$EnvironmentPath,
+        [string]$CommandName,
+        [string]$ParameterName
+    )
+
+    if (![string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        if (Test-Path -LiteralPath $ExplicitPath) {
+            return (Resolve-Path -LiteralPath $ExplicitPath).Path
+        }
+        throw "$CommandName was not found at $ExplicitPath. Pass a valid -$ParameterName."
+    }
+
+    if (![string]::IsNullOrWhiteSpace($EnvironmentPath) -and (Test-Path -LiteralPath $EnvironmentPath)) {
+        return (Resolve-Path -LiteralPath $EnvironmentPath).Path
+    }
+
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    throw "$CommandName was not found. Add it to PATH or pass -$ParameterName."
 }
-if (!(Test-Path -LiteralPath $VsNinja)) {
-    throw "ninja.exe was not found at $VsNinja"
-}
+
+$CMakeExe = Resolve-Executable -ExplicitPath $CMakePath -EnvironmentPath $env:CMAKE_EXE -CommandName "cmake.exe" -ParameterName "CMakePath"
+$NinjaExe = Resolve-Executable -ExplicitPath $NinjaPath -EnvironmentPath $env:NINJA_EXE -CommandName "ninja.exe" -ParameterName "NinjaPath"
 
 if ([string]::IsNullOrWhiteSpace($NdkRoot)) {
     $candidates = @(
         "$env:LOCALAPPDATA\Android\Sdk\ndk",
-        "$env:USERPROFILE\AppData\Local\Android\Sdk\ndk",
-        "D:\Android\Sdk\ndk",
-        "C:\Android\Sdk\ndk",
-        "D:\VSTool\Shared\Android\AndroidNDK"
+        "$env:USERPROFILE\AppData\Local\Android\Sdk\ndk"
     )
     foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate) {
@@ -69,11 +87,11 @@ if (!(Test-Path -LiteralPath "$EuiAndroidPortRoot\core\platform\android\native_s
 $AbsBuildDir = Join-Path $ProjectRoot $BuildDir
 New-Item -ItemType Directory -Force -Path $AbsBuildDir | Out-Null
 
-& $VsCMake `
+& $CMakeExe `
     -S $ProjectRoot `
     -B $AbsBuildDir `
     -G Ninja `
-    "-DCMAKE_MAKE_PROGRAM=$VsNinja" `
+    "-DCMAKE_MAKE_PROGRAM=$NinjaExe" `
     "-DCMAKE_TOOLCHAIN_FILE=$NdkRoot\build\cmake\android.toolchain.cmake" `
     "-DANDROID_ABI=arm64-v8a" `
     "-DANDROID_PLATFORM=$AndroidPlatform" `
@@ -82,7 +100,7 @@ New-Item -ItemType Directory -Force -Path $AbsBuildDir | Out-Null
     "-DEUI_ROOT=$EuiRoot" `
     "-DEUI_ANDROID_PORT_ROOT=$EuiAndroidPortRoot"
 
-& $VsCMake --build $AbsBuildDir --parallel
+& $CMakeExe --build $AbsBuildDir --parallel
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
