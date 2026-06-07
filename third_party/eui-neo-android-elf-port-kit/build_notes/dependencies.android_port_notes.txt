@@ -1,29 +1,10 @@
-# Android Dependencies Port Notes
+# Android ELF 依赖记录
 
-本文件记录 EUI-NEO 依赖系统在 Android ELF 移植时需要注意的地方。
+本文记录 Android root ELF 路径下需要保留和跳过的依赖。
 
----
+## 必需系统库
 
-## 1. 桌面依赖跳过
-
-Android ELF 后端不需要：
-
-```text
-GLFW
-SDL2
-glad
-OpenGL::GL
-GTK
-AppIndicator
-```
-
-因为窗口由 SurfaceComposerClient 创建，渲染使用 Android Vulkan。
-
----
-
-## 2. Android 系统库
-
-Android ELF 需要链接：
+显示链路需要：
 
 ```text
 libandroid.so
@@ -33,29 +14,50 @@ libdl.so
 libc.so
 ```
 
-CMake 通常写成：
+CMake 中通常写成：
 
 ```cmake
-target_link_libraries(target PRIVATE android log vulkan)
+target_link_libraries(target PRIVATE android log vulkan dl)
 ```
 
----
+## C++ 运行时
 
-## 3. libc++
+有两种部署方式。
 
-如果使用 shared libc++，运行时需要部署：
+静态链接：
 
 ```text
-libc++_shared.so
+ANDROID_STL=c++_static
 ```
 
-如果使用 static libc++，则不需要单独部署，但 ELF 体积更大。
+不需要部署 `libc++_shared.so`，但 ELF 体积会更大。NeoPanel 当前使用这一种。
 
----
+动态链接：
 
-## 4. zlib / libpng 等 bundled 依赖
+```text
+ANDROID_STL=c++_shared
+```
 
-Android/Bionic 下需要注意：
+需要把 `libc++_shared.so` 放到 ELF 旁边。
+
+## 跳过桌面库
+
+Android ELF 目标不应依赖：
+
+```text
+GLFW
+SDL2
+OpenGL::GL
+glad
+GTK
+AppIndicator
+```
+
+这些属于桌面窗口、桌面 OpenGL 或桌面集成。
+
+## Bundled 依赖
+
+zlib、图片库或文字库可能会检查 POSIX 头文件。Android/Bionic 提供常见调用：
 
 ```text
 unistd.h
@@ -64,40 +66,10 @@ close
 lseek
 ```
 
-如果 bundled zlib 检测不完整，可能需要确保：
+如果某个库的检测脚本漏判，可以在 Android 构建里显式定义对应 feature macro。
 
-```cmake
-HAVE_UNISTD_H
-```
+## 可选依赖
 
-在 Android 下被定义。
+CURL、HarfBuzz 等库不是 Surface、Vulkan 和触摸链路的必需项。
 
----
-
-## 5. 构建目录
-
-如果使用 Android 设备上的 Linux/proot 环境构建，不建议在共享存储目录中构建，因为部分依赖可能需要 symlink。
-
-在 Windows 上开发时，则建议在普通 NTFS 工作目录或 WSL/Linux 构建目录中构建。
-
----
-
-## 6. CURL
-
-CURL 不是 Android ELF 显示链路必需项。
-
-如果项目中 CURL 是可选功能，Android 移植阶段建议：
-
-```text
-find_package(CURL QUIET)
-```
-
-或者暂时关闭相关功能，避免阻塞 UI 移植。
-
----
-
-## 7. HarfBuzz
-
-HarfBuzz 不是 Android Surface/Vulkan/触摸链路必需项。
-
-如果遇到字体 shaping 依赖问题，可以先关闭，等 UI 链路稳定后再恢复。
+早期移植阶段建议先关闭可选功能。窗口、渲染和输入稳定后，再逐项恢复。

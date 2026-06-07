@@ -1,33 +1,40 @@
 # NeoPanel Android ELF
 
-NeoPanel Android ELF 目前定位为 EUI-NEO 在 Android root ELF 环境下的移植实现和验证样例。它可以从 Android root shell 直接启动，不经过 APK、Activity、Android View 或 Java/Kotlin 入口；程序自己创建 Android Surface，并把 `ANativeWindow` 交给 Vulkan 渲染。
+NeoPanel Android ELF 是 EUI-NEO 在 Android root ELF 环境下的一次移植实现。
 
-界面层直接复用 EUI-NEO 的渲染 primitive 和 Vulkan 后端能力。上游项目以 Git submodule 形式保留在仓库中：
+它不是 APK，也不是一个新的 UI 框架。仓库保留的是一条 Android ELF 路线：从 root shell 启动 arm64 ELF，由程序自己创建 Android Surface，把 `ANativeWindow` 交给 Vulkan，并用 EUI-NEO 的 primitive 绘制界面。
 
-```text
-third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
-```
+当前面板用于测试这条移植链路。需要关注的代码主要在 Android Surface、Vulkan、输入和资源嵌入几部分。
+
+## 文档入口
+
+- [构建与运行](docs/BUILD_AND_RUN.md)：准备子模块、构建 ELF、验证产物、推送到设备运行。
+- [Android ELF 移植说明](docs/PORTING.md)：说明窗口、Vulkan、输入和资源嵌入的移植边界。
+- [第三方代码](third_party/README.md)：说明 EUI-NEO 子模块和 Android ELF Port Kit 的来源。
+- [Android ELF Port Kit](third_party/eui-neo-android-elf-port-kit/README_Android_ELF_Port.md)：记录 port-kit 目录里的 Surface、Vulkan、input 和 CMake 移植点。
 
 ## 当前产物
 
-构建输出是一个 arm64 ELF：
+构建输出：
 
 ```text
 build/android/neopanel_android
 ```
 
-部署后在 root shell 中运行：
+运行方式：
 
 ```sh
 chmod 755 /data/local/tmp/neopanel/neopanel_android
 /data/local/tmp/neopanel/neopanel_android
 ```
 
+程序会读取 `/dev/input/event*`，通常需要 root 权限。
+
 ## 目录结构
 
 ```text
 src/
-  main.cpp                         面板 UI、字体、资源、渲染循环
+  main.cpp                         面板样例、字体、资源、渲染循环
   android_window_backend_panel.cpp 固定面板 Surface 与触摸输入后端
   embedded_assets.h                编译期嵌入资源声明
 cmake/
@@ -43,9 +50,9 @@ third_party/
   eui-neo-android-elf-port-kit/    Android Surface/Vulkan/input 移植代码
 ```
 
-## 构建
+## 快速构建
 
-首次克隆仓库时建议拉取子模块：
+首次克隆时拉取子模块：
 
 ```powershell
 git clone --recurse-submodules https://github.com/Sakura-TWT/NeoPanel-Android-ELF
@@ -57,36 +64,40 @@ git clone --recurse-submodules https://github.com/Sakura-TWT/NeoPanel-Android-EL
 git submodule update --init --recursive
 ```
 
-在 Windows 上构建时，建议先通过环境变量指定 Android NDK：
+设置 Android NDK 后构建：
 
 ```powershell
 $env:ANDROID_NDK_HOME = '<Android NDK 安装目录>'
 powershell -ExecutionPolicy Bypass -File .\build_android.ps1
 ```
 
-也可以使用已有的 EUI-NEO 本地源码：
+如果 CMake、Ninja 或 EUI-NEO 不在默认位置，可以显式传入：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
   -NdkRoot '<Android NDK 安装目录>' `
+  -CMakePath '<cmake.exe 路径>' `
+  -NinjaPath '<ninja.exe 路径>' `
   -EuiRoot '<EUI-NEO 源码目录>'
 ```
 
-更多命令见 [docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md)。
+## 移植范围
 
-## 移植核心
+这个仓库目前覆盖：
 
-这个工程把桌面 UI 框架常见的窗口入口替换成 Android root ELF 路径：
+- `SurfaceComposerClient` 创建 Android Surface。
+- `VK_KHR_android_surface` 将 Vulkan 渲染到 `ANativeWindow`。
+- `/dev/input/event*` 触摸输入读取。
+- 手指拖动到 EUI scroll input 的转换。
+- `ANDROID_STL=c++_static` 静态链接。
+- 头像和字体在编译期嵌入 ELF。
 
-- 使用 SurfaceComposer 创建 Surface。
-- 通过 `VK_KHR_android_surface` 把 Vulkan 渲染到 `ANativeWindow`。
-- 从 `/dev/input/event*` 读取触摸输入。
-- 将手指拖动转换成 EUI 滚动输入。
-- 使用 `ANDROID_STL=c++_static`，运行时不需要额外部署 `libc++_shared.so`。
-- 将头像和字体在编译期嵌入 ELF，运行时不依赖旁置资源目录。
+暂不覆盖：
 
-移植细节见 [docs/PORTING.md](docs/PORTING.md)。
+- APK、Activity、Android View 和输入法接入。
+- 通用 Android 自适应布局系统。
+- 完整 EUI-NEO 工程替代方案。
 
 ## 许可证
 
-本仓库保留 Apache-2.0 许可证文本。EUI-NEO 上游源码以子模块方式引用，发布和二次分发时应保留上游许可证与声明。
+本仓库保留 Apache-2.0 许可证文本。EUI-NEO 以子模块方式引用，发布和二次分发时应保留上游许可证与声明。
