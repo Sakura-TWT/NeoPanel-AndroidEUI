@@ -65,13 +65,21 @@ struct RuntimeStats {
 struct PanelState {
     int selected = 0;
     int pressedNav = -1;
+    int capturedNav = -1;
     int pressedDemoButton = -1;
+    int capturedDemoButton = -1;
     int demoButton = 0;
     int activeControl = 0;
     int pressedSceneMode = -1;
+    int capturedSceneMode = -1;
     bool pressedLanguage = false;
+    bool capturedLanguage = false;
     bool pressedTheme = false;
+    bool capturedTheme = false;
     bool pressedDemoSwitch = false;
+    bool capturedDemoSwitch = false;
+    bool capturedDemoSlider = false;
+    bool capturedFpsSlider = false;
     bool demoSwitch = true;
     float demoSlider = 0.44f;
     float navBlend = 0.0f;
@@ -215,6 +223,28 @@ float easeOutBack(float t) {
 
 bool contains(const core::Rect& rect, double x, double y) {
     return rect.contains(x, y);
+}
+
+void clearPointerCaptures(PanelState& state) {
+    state.capturedNav = -1;
+    state.capturedDemoButton = -1;
+    state.capturedSceneMode = -1;
+    state.capturedLanguage = false;
+    state.capturedTheme = false;
+    state.capturedDemoSwitch = false;
+    state.capturedDemoSlider = false;
+    state.capturedFpsSlider = false;
+}
+
+bool hasPointerCapture(const PanelState& state) {
+    return state.capturedNav >= 0 ||
+           state.capturedDemoButton >= 0 ||
+           state.capturedSceneMode >= 0 ||
+           state.capturedLanguage ||
+           state.capturedTheme ||
+           state.capturedDemoSwitch ||
+           state.capturedDemoSlider ||
+           state.capturedFpsSlider;
 }
 
 const char* tr(const char* en, const char* zh) {
@@ -2165,54 +2195,96 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     const core::Rect themeRect = expandedRect(themeToggleRect(), 12.0f);
     const core::Rect demoButtonArea{contentX + 30.0f, demoY0 + 134.0f, contentW - 60.0f, 82.0f};
     const core::Rect demoSwitchHit = expandedRect(demoSwitchRect(contentX + 30.0f, demoY0 + 224.0f, contentW - 60.0f), 10.0f);
-    const core::Rect demoSliderHit = expandedRect(demoSliderRect(contentX + 30.0f, demoY0 + 342.0f, contentW - 60.0f), 10.0f);
+    const core::Rect demoSliderTrack = demoSliderRect(contentX + 30.0f, demoY0 + 342.0f, contentW - 60.0f);
+    const core::Rect demoSliderHit = expandedRect(demoSliderTrack, 10.0f);
 
-    bool interacting = false;
-    state.pressedLanguage = pointer.down && contains(languageRect, pointer.x, pointer.y);
-    state.pressedTheme = pointer.down && contains(themeRect, pointer.x, pointer.y);
+    if (pointer.pressedThisFrame) {
+        clearPointerCaptures(state);
+
+        if (contains(languageRect, pointer.x, pointer.y)) {
+            state.capturedLanguage = true;
+        } else if (contains(themeRect, pointer.x, pointer.y)) {
+            state.capturedTheme = true;
+        } else if (state.selected == 1 && contains(fpsRect, pointer.x, pointer.y)) {
+            state.capturedFpsSlider = true;
+        } else if (state.selected == 0 && pointer.y >= scrollTop && pointer.y <= scrollBottom) {
+            if (contains(demoSliderHit, pointer.x, pointer.y)) {
+                state.capturedDemoSlider = true;
+            } else if (contains(demoSwitchHit, pointer.x, pointer.y)) {
+                state.capturedDemoSwitch = true;
+            } else {
+                for (int i = 0; i < 3; ++i) {
+                    const core::Rect button = expandedRect(demoButtonRect(i, contentX + 30.0f, demoY0 + 144.0f, contentW - 60.0f), 8.0f);
+                    if (contains(button, pointer.x, pointer.y)) {
+                        state.capturedDemoButton = i;
+                        break;
+                    }
+                }
+            }
+        } else if (state.selected == 2) {
+            for (int i = 0; i < 3; ++i) {
+                const core::Rect sceneRect = expandedRect(sceneModeRect(i, contentX, contentW, motionStageY), 8.0f);
+                if (contains(sceneRect, pointer.x, pointer.y)) {
+                    state.capturedSceneMode = i;
+                    break;
+                }
+            }
+        }
+
+        if (!hasPointerCapture(state)) {
+            for (int i = 0; i < 4; ++i) {
+                if (contains(navRect(i), pointer.x, pointer.y)) {
+                    state.capturedNav = i;
+                    break;
+                }
+            }
+        }
+    } else if (!pointer.down && !pointer.releasedThisFrame) {
+        clearPointerCaptures(state);
+    }
+
+    bool interacting = hasPointerCapture(state) && (pointer.down || pointer.releasedThisFrame);
+    state.pressedLanguage = pointer.down && state.capturedLanguage && contains(languageRect, pointer.x, pointer.y);
+    state.pressedTheme = pointer.down && state.capturedTheme && contains(themeRect, pointer.x, pointer.y);
     state.pressedDemoButton = -1;
     state.pressedSceneMode = -1;
-    state.pressedDemoSwitch = false;
+    state.pressedDemoSwitch = pointer.down && state.capturedDemoSwitch && contains(demoSwitchHit, pointer.x, pointer.y);
     state.activeControl = 0;
 
-    if (pointer.down && state.selected == 1 && contains(fpsRect, pointer.x, pointer.y)) {
+    if (pointer.down && state.capturedFpsSlider) {
         const float t = std::clamp(static_cast<float>(pointer.x - fpsTrackRect.x) / fpsTrackRect.width, 0.0f, 1.0f);
         gTargetFps = std::round((kFpsMin + (kFpsMax - kFpsMin) * t) / 5.0f) * 5.0f;
         state.activeControl = 1;
         interacting = true;
     }
 
-    if (pointer.releasedThisFrame && contains(languageRect, pointer.x, pointer.y)) {
+    if (pointer.releasedThisFrame && state.capturedLanguage && contains(languageRect, pointer.x, pointer.y)) {
         gChinese = !gChinese;
         interacting = true;
     }
 
-    if (pointer.releasedThisFrame && contains(themeRect, pointer.x, pointer.y)) {
+    if (pointer.releasedThisFrame && state.capturedTheme && contains(themeRect, pointer.x, pointer.y)) {
         gNight = !gNight;
         interacting = true;
     }
 
     if (state.selected == 0 && pointer.y >= scrollTop && pointer.y <= scrollBottom) {
-        if (pointer.down && contains(demoSliderHit, pointer.x, pointer.y)) {
-            state.demoSlider = std::clamp(static_cast<float>(pointer.x - demoSliderHit.x) / demoSliderHit.width, 0.0f, 1.0f);
+        if (pointer.down && state.capturedDemoSlider) {
+            state.demoSlider = std::clamp(static_cast<float>(pointer.x - demoSliderTrack.x) / demoSliderTrack.width, 0.0f, 1.0f);
             state.activeControl = 2;
             interacting = true;
         }
-        if (pointer.down && contains(demoSwitchHit, pointer.x, pointer.y)) {
-            state.pressedDemoSwitch = true;
-            interacting = true;
-        }
-        if (pointer.releasedThisFrame && contains(demoSwitchHit, pointer.x, pointer.y)) {
+        if (pointer.releasedThisFrame && state.capturedDemoSwitch && contains(demoSwitchHit, pointer.x, pointer.y)) {
             state.demoSwitch = !state.demoSwitch;
             interacting = true;
         }
         for (int i = 0; i < 3; ++i) {
             const core::Rect button = expandedRect(demoButtonRect(i, contentX + 30.0f, demoY0 + 144.0f, contentW - 60.0f), 8.0f);
-            if (pointer.down && contains(button, pointer.x, pointer.y)) {
+            if (pointer.down && state.capturedDemoButton == i && contains(button, pointer.x, pointer.y)) {
                 state.pressedDemoButton = i;
                 interacting = true;
             }
-            if (pointer.releasedThisFrame && contains(button, pointer.x, pointer.y)) {
+            if (pointer.releasedThisFrame && state.capturedDemoButton == i && contains(button, pointer.x, pointer.y)) {
                 state.demoButton = i;
                 interacting = true;
             }
@@ -2223,11 +2295,11 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     if (state.selected == 2) {
         for (int i = 0; i < 3; ++i) {
             const core::Rect sceneRect = expandedRect(sceneModeRect(i, contentX, contentW, motionStageY), 8.0f);
-            if (pointer.down && contains(sceneRect, pointer.x, pointer.y)) {
+            if (pointer.down && state.capturedSceneMode == i && contains(sceneRect, pointer.x, pointer.y)) {
                 state.pressedSceneMode = i;
                 interacting = true;
             }
-            if (pointer.releasedThisFrame && contains(sceneRect, pointer.x, pointer.y)) {
+            if (pointer.releasedThisFrame && state.capturedSceneMode == i && contains(sceneRect, pointer.x, pointer.y)) {
                 gSceneMode = i;
                 interacting = true;
             }
@@ -2244,16 +2316,20 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
 
     state.pressedNav = -1;
     for (int i = 0; i < 4; ++i) {
-        if (pointer.down && contains(navRect(i), pointer.x, pointer.y)) {
+        if (pointer.down && state.capturedNav == i && contains(navRect(i), pointer.x, pointer.y)) {
             state.pressedNav = i;
             interacting = true;
         }
-        if (pointer.releasedThisFrame && contains(navRect(i), pointer.x, pointer.y)) {
+        if (pointer.releasedThisFrame && state.capturedNav == i && contains(navRect(i), pointer.x, pointer.y)) {
             state.selected = i;
             state.targetScroll = 0.0f;
             state.contentScroll = 0.0f;
             interacting = true;
         }
+    }
+
+    if (pointer.releasedThisFrame) {
+        clearPointerCaptures(state);
     }
 
     state.targetScroll = std::clamp(state.targetScroll, 0.0f, pageScrollLimit(state.selected));
