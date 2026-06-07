@@ -47,6 +47,8 @@ struct AndroidWindow {
     double pointerX = 0.0;
     double pointerY = 0.0;
     bool pointerDown = false;
+    bool rawTouchDown = false;
+    bool panelTouchActive = false;
     bool touchScrollActive = false;
     double lastTouchY = 0.0;
 
@@ -69,10 +71,6 @@ Clock::time_point& startTime() {
 
 AndroidWindow* asAndroidWindow(Handle window) {
     return static_cast<AndroidWindow*>(window);
-}
-
-int clampInt(int value, int minValue, int maxValue) {
-    return std::max(minValue, std::min(value, maxValue));
 }
 
 bool hasAbsCode(int fd, int code) {
@@ -160,17 +158,26 @@ void setPointer(AndroidWindow* window, float screenX, float screenY, bool down) 
     double scrollY = 0.0;
     {
         std::lock_guard<std::mutex> lock(window->pointerMutex);
-        const bool active = down && inside;
-        if (active && window->touchScrollActive) {
+        const bool startingTouch = down && !window->rawTouchDown;
+        if (!down) {
+            window->panelTouchActive = false;
+        } else if (startingTouch && inside) {
+            window->panelTouchActive = true;
+        }
+        window->rawTouchDown = down;
+
+        const bool active = down && window->panelTouchActive;
+        const bool scrollActive = active && inside;
+        if (scrollActive && window->touchScrollActive) {
             const double dy = localY - window->lastTouchY;
             if (std::fabs(dy) >= 4.0) {
                 scrollY = dy / 18.0;
             }
         }
-        window->touchScrollActive = active;
+        window->touchScrollActive = scrollActive;
         window->lastTouchY = localY;
-        window->pointerX = clampInt(static_cast<int>(localX), 0, window->width);
-        window->pointerY = clampInt(static_cast<int>(localY), 0, window->height);
+        window->pointerX = localX;
+        window->pointerY = localY;
         window->pointerDown = active;
     }
 
@@ -217,6 +224,8 @@ void touchThreadMain(AndroidWindow* window, TouchDeviceInfo device) {
                 } else if (!down) {
                     std::lock_guard<std::mutex> lock(window->pointerMutex);
                     window->pointerDown = false;
+                    window->rawTouchDown = false;
+                    window->panelTouchActive = false;
                     window->touchScrollActive = false;
                 }
             }

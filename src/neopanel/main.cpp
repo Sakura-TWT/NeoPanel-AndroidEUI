@@ -36,7 +36,9 @@ constexpr int kGraphSamples = 56;
 constexpr float kFpsMin = 30.0f;
 constexpr float kFpsMax = 120.0f;
 constexpr float kPi = 3.14159265358979323846f;
-constexpr int kStarTextureSize = 240;
+constexpr int kStarTextureSize = 288;
+constexpr float kStarRestYaw = -0.12f;
+constexpr float kStarRestPitch = -0.10f;
 
 bool gChinese = false;
 bool gNight = true;
@@ -56,6 +58,10 @@ struct StarRenderTexture {
     int width = 0;
     int height = 0;
     bool baseReady = false;
+    float shadedYaw = 1000.0f;
+    float shadedPitch = 1000.0f;
+    float shadedPhase = -1000.0f;
+    bool shadedPressed = false;
     std::vector<unsigned char> pixels;
     std::vector<float> alpha;
     std::vector<float> glow;
@@ -98,10 +104,13 @@ struct PanelState {
     bool capturedStar = false;
     bool demoSwitch = true;
     float demoSlider = 0.44f;
-    float starYaw = -0.18f;
-    float starPitch = -0.12f;
-    float starTargetYaw = -0.18f;
-    float starTargetPitch = -0.12f;
+    float starYaw = kStarRestYaw;
+    float starPitch = kStarRestPitch;
+    float starTargetYaw = kStarRestYaw;
+    float starTargetPitch = kStarRestPitch;
+    float starYawVelocity = 0.0f;
+    float starPitchVelocity = 0.0f;
+    float starPressAmount = 0.0f;
     float navBlend = 0.0f;
     float contentScroll = 0.0f;
     float targetScroll = 0.0f;
@@ -159,8 +168,8 @@ constexpr std::array<PageInfo, 4> kPages{{
      "EUI NEO 工坊", "控件 材质 图像与节奏的紧凑展示", "展示"},
     {"FRAME FIELD", "Performance is isolated here with a live frame-rate selector.", "TELEMETRY",
      "帧率场", "性能独立展示 可实时选择整体帧率", "性能"},
-    {"EFFECT STAGE", "Perspective card motion inspired by the EUI gallery.", "MOTION",
-     "动效舞台", "参考 EUI Gallery 的透视卡片动效", "动效"},
+    {"EFFECT STAGE", "Premium star depth, pearl light and gesture-driven motion.", "MOTION",
+     "动效舞台", "高级版星形深度 光泽与手势动效", "动效"},
     {"SYSTEM NOTES", "Android Surface, Vulkan backend, static STL and ELF deployment.", "RUNTIME",
      "系统笔记", "安卓 Surface Vulkan 静态 STL 与 ELF 部署", "运行"},
 }};
@@ -226,6 +235,18 @@ float clamp01(float value) {
 float approach(float current, float target, float deltaSeconds, float sharpness) {
     const float t = 1.0f - std::exp(-sharpness * std::max(0.0f, deltaSeconds));
     return current + (target - current) * t;
+}
+
+float springApproach(float current, float target, float& velocity, float deltaSeconds, float stiffness, float damping) {
+    const float dt = std::clamp(deltaSeconds, 0.0f, 0.050f);
+    const float acceleration = (target - current) * stiffness - velocity * damping;
+    velocity += acceleration * dt;
+    current += velocity * dt;
+    if (std::fabs(target - current) < 0.00035f && std::fabs(velocity) < 0.00035f) {
+        velocity = 0.0f;
+        return target;
+    }
+    return current;
 }
 
 float easeOutCubic(float t) {
@@ -368,7 +389,7 @@ core::Rect premiumStarVisualRect(float contentX, float contentW, float stageY) {
 }
 
 core::Rect premiumStarHitRect(float contentX, float contentW, float stageY) {
-    return expandedRect(premiumStarVisualRect(contentX, contentW, stageY), 26.0f);
+    return expandedRect(premiumStarStageRect(contentX, contentW, stageY), 8.0f);
 }
 
 core::Rect demoButtonRect(int index, float x, float y, float width) {
@@ -1110,20 +1131,23 @@ void buildPremiumStarBase(StarRenderTexture& texture) {
             const float angle = std::atan2(v, u);
             const float starRadius = premiumStarRadius(angle);
             const float signedDistance = radius - starRadius;
-            const float alpha = 1.0f - smoothstep(-0.014f, 0.024f, signedDistance);
-            const float outsideGlow = std::exp(-std::max(0.0f, signedDistance) * std::max(0.0f, signedDistance) * 30.0f);
+            const float alpha = 1.0f - smoothstep(-0.018f, 0.020f, signedDistance);
+            const float outsideGlow = std::exp(-std::max(0.0f, signedDistance) * std::max(0.0f, signedDistance) * 58.0f);
             const float innerDistance = std::max(0.0f, -signedDistance);
-            const float edge = smoothstep(0.0f, 0.165f, innerDistance);
+            const float edge = smoothstep(0.0f, 0.155f, innerDistance);
             const float ridge = std::pow(0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f)), 2.5f);
             const float dome = std::pow(std::max(0.0f, 1.0f - radius * 0.68f), 1.6f);
             const float tipLift = ridge * smoothstep(0.36f, 0.82f, radius / std::max(0.001f, starRadius));
             const float valleyFold = (1.0f - ridge) * smoothstep(0.40f, 0.95f, radius / std::max(0.001f, starRadius));
-            const float height = alpha * std::clamp(0.10f + edge * 0.58f + dome * 0.28f + tipLift * 0.18f - valleyFold * 0.08f,
+            const float centerFold = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f))), 8.0f) *
+                                     smoothstep(0.08f, 0.68f, radius / std::max(0.001f, starRadius));
+            const float height = alpha * std::clamp(0.10f + edge * 0.60f + dome * 0.30f + tipLift * 0.20f +
+                                                        centerFold * 0.12f - valleyFold * 0.10f,
                                                     0.0f,
                                                     1.0f);
             const std::size_t index = static_cast<std::size_t>(y * texture.width + x);
             texture.alpha[index] = alpha;
-            texture.glow[index] = outsideGlow * 0.42f * (1.0f - alpha);
+            texture.glow[index] = outsideGlow * 0.20f * (1.0f - alpha);
             texture.heightMap[index] = height;
             texture.edge[index] = edge;
         }
@@ -1155,6 +1179,15 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
 
     core::render::RenderBackend* backend = core::render::activeRenderBackend();
     if (backend == nullptr) {
+        return;
+    }
+
+    const float phase = std::floor(timeSeconds * 20.0f) / 20.0f;
+    if (texture.handle != nullptr &&
+        std::fabs(texture.shadedYaw - yaw) < 0.0025f &&
+        std::fabs(texture.shadedPitch - pitch) < 0.0025f &&
+        std::fabs(texture.shadedPhase - phase) < 0.001f &&
+        texture.shadedPressed == pressed) {
         return;
     }
 
@@ -1191,14 +1224,15 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
             const float diagonal = 1.0f - smoothstep(0.010f, 0.090f, std::fabs(u * 0.72f + v * 0.48f + 0.11f - yaw * 0.06f));
             const float topFlash = std::exp(-((u + 0.24f - yaw * 0.10f) * (u + 0.24f - yaw * 0.10f) * 12.0f +
                                              (v + 0.36f + pitch * 0.08f) * (v + 0.36f + pitch * 0.08f) * 18.0f));
-            const float pearlescent = 0.5f + 0.5f * std::sin((u - v) * 5.0f + timeSeconds * 0.72f);
-            const float shade = 0.58f + diffuse * 0.44f + broad * 0.20f + spec * 0.58f + diagonal * 0.14f + topFlash * 0.28f;
-            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.7f) * 0.22f + edgeTint * 0.20f;
+            const float pearlescent = 0.5f + 0.5f * std::sin((u - v) * 5.0f + phase * 0.72f);
+            const float fold = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (std::atan2(v, u) + kPi * 0.5f))), 4.0f);
+            const float shade = 0.64f + diffuse * 0.40f + broad * 0.22f + spec * 0.62f + diagonal * 0.12f + topFlash * 0.26f + fold * 0.08f;
+            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.6f) * 0.24f + edgeTint * 0.18f;
             const float warmth = 0.36f + 0.22f * pearlescent + yaw * 0.10f;
 
-            float r = 0.72f + shade * 0.24f + rim * 0.18f + topFlash * 0.14f;
-            float g = 0.76f + shade * 0.20f + rim * 0.12f;
-            float b = 0.98f + shade * 0.14f + rim * 0.10f;
+            float r = 0.75f + shade * 0.24f + rim * 0.19f + topFlash * 0.16f;
+            float g = 0.78f + shade * 0.21f + rim * 0.13f;
+            float b = 0.99f + shade * 0.15f + rim * 0.10f;
             r += warmth * 0.08f + pressGlow * 0.025f;
             g += (1.0f - warmth) * 0.05f + pressGlow * 0.018f;
             b += 0.05f + pressGlow * 0.020f;
@@ -1212,7 +1246,7 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
                 texture.pixels[pixel + 0] = byteFromFloat(0.72f + 0.10f * pearlescent);
                 texture.pixels[pixel + 1] = byteFromFloat(0.68f + 0.14f * pearlescent);
                 texture.pixels[pixel + 2] = byteFromFloat(1.0f);
-                texture.pixels[pixel + 3] = byteFromFloat(glow * (0.30f + pressGlow * 0.16f));
+                texture.pixels[pixel + 3] = byteFromFloat(glow * (0.18f + pressGlow * 0.10f));
                 continue;
             }
 
@@ -1228,6 +1262,10 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
     } else {
         backend->updateTexture(texture.handle, texture.pixels.data(), texture.width, texture.height);
     }
+    texture.shadedYaw = yaw;
+    texture.shadedPitch = pitch;
+    texture.shadedPhase = phase;
+    texture.shadedPressed = pressed;
 }
 
 FontGlyph* ensureFontGlyph(std::uint32_t codepoint, int pixelHeight) {
@@ -2195,6 +2233,9 @@ void renderTelemetryPage(PanelState& state, float contentX, float contentY, floa
 }
 
 void drawStarSparkle(float x, float y, float size, const core::Color& color, float opacity) {
+    if (opacity <= 0.001f || size <= 0.5f) {
+        return;
+    }
     drawLine(x, y - size, x, y + size, size * 0.12f, color, opacity);
     drawLine(x - size, y, x + size, y, size * 0.12f, color, opacity);
     drawLine(x - size * 0.46f, y - size * 0.46f, x + size * 0.46f, y + size * 0.46f, size * 0.075f, color, opacity * 0.62f);
@@ -2202,17 +2243,36 @@ void drawStarSparkle(float x, float y, float size, const core::Color& color, flo
     drawAccentDot(x, y, size * 0.11f, rgba(1.0f, 1.0f, 1.0f, color.a), opacity);
 }
 
+void drawStarGlowArc(float x, float y, float width, float height, float yaw, float pitch, float opacity) {
+    const float centerX = x + width * 0.5f + yaw * 18.0f;
+    const float centerY = y + height * 0.56f + pitch * 10.0f;
+    for (int i = 0; i < 3; ++i) {
+        const float t = static_cast<float>(i);
+        drawRect(centerX - width * (0.26f + t * 0.042f),
+                 centerY - height * (0.080f + t * 0.018f),
+                 width * (0.52f + t * 0.084f),
+                 height * (0.16f + t * 0.036f),
+                 height * 0.09f,
+                 rgba(0.84f, 0.72f, 1.0f, (0.070f - t * 0.014f) * opacity),
+                 {},
+                 {},
+                 {},
+                 opacity,
+                 16.0f + t * 8.0f);
+    }
+}
+
 void renderPremiumStarStage(PanelState& state, float contentX, float contentW, float stageY, float opacity) {
     const core::Color accent = pageAccent(2);
     const core::Rect stage = premiumStarStageRect(contentX, contentW, stageY);
     const core::Rect visual = premiumStarVisualRect(contentX, contentW, stageY);
-    const float pressed = state.pressedStar ? 1.0f : 0.0f;
+    const float pressed = state.starPressAmount;
     const float pulse = std::sin(state.launchTime * 2.1f) * 0.5f + 0.5f;
 
     core::Gradient stageGradient;
     stageGradient.enabled = true;
-    stageGradient.start = gNight ? rgba(0.34f, 0.36f, 1.0f, 0.20f * opacity) : rgba(0.48f, 0.58f, 1.0f, 0.14f * opacity);
-    stageGradient.end = gNight ? rgba(0.94f, 0.34f, 0.76f, 0.24f * opacity) : rgba(0.98f, 0.46f, 0.72f, 0.16f * opacity);
+    stageGradient.start = gNight ? rgba(0.32f, 0.36f, 1.0f, 0.22f * opacity) : rgba(0.48f, 0.58f, 1.0f, 0.15f * opacity);
+    stageGradient.end = gNight ? rgba(0.98f, 0.36f, 0.74f, 0.28f * opacity) : rgba(0.98f, 0.46f, 0.72f, 0.18f * opacity);
     stageGradient.direction = core::GradientDirection::Horizontal;
     drawRect(stage.x, stage.y, stage.width, stage.height, 30.0f,
              rgba(accent.r, accent.g, accent.b, (0.076f + pressed * 0.028f) * opacity),
@@ -2220,8 +2280,12 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
              {true, {0.0f, 18.0f}, 34.0f, 0.0f, rgba(0.10f, 0.04f, 0.15f, 0.16f * opacity)},
              stageGradient);
 
-    drawRect(stage.x + 26.0f, stage.y + stage.height - 56.0f, stage.width - 52.0f, 10.0f, 5.0f,
-             rgba(1.0f, 1.0f, 1.0f, 0.13f * opacity), {}, {}, {}, opacity, 12.0f);
+    drawRect(stage.x + 30.0f, stage.y + 30.0f, stage.width - 60.0f, stage.height - 62.0f, 28.0f,
+             rgba(1.0f, 1.0f, 1.0f, 0.032f * opacity),
+             {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.044f * opacity)});
+    drawStarGlowArc(visual.x, visual.y, visual.width, visual.height, state.starYaw, state.starPitch, opacity);
+    drawRect(stage.x + 30.0f, stage.y + stage.height - 54.0f, stage.width - 60.0f, 9.0f, 4.5f,
+             rgba(1.0f, 1.0f, 1.0f, 0.11f * opacity), {}, {}, {}, opacity, 13.0f);
     drawRect(visual.x + 36.0f + state.starYaw * 18.0f,
              visual.y + visual.height - 18.0f - state.starPitch * 12.0f,
              visual.width - 72.0f,
@@ -2234,13 +2298,13 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
              opacity,
              18.0f);
 
-    for (int i = 0; i < 28; ++i) {
+    for (int i = 0; i < 18; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
         const float px = stage.x + 38.0f + hash01(seed) * (stage.width - 76.0f);
         const float py = stage.y + 34.0f + hash01(seed + 9.0f) * (stage.height - 90.0f);
         const float shimmer = smoothstep(0.08f, 1.0f, 0.5f + 0.5f * std::sin(state.launchTime * (1.3f + hash01(seed + 4.0f) * 1.8f) + seed));
-        const float size = 1.4f + hash01(seed + 2.0f) * 3.8f;
-        const float op = (0.10f + shimmer * 0.34f) * opacity;
+        const float size = 2.4f + hash01(seed + 2.0f) * 4.6f;
+        const float op = (0.040f + shimmer * 0.22f) * opacity;
         drawStarSparkle(px + state.starYaw * (6.0f + hash01(seed + 5.0f) * 12.0f),
                          py - state.starPitch * (4.0f + hash01(seed + 6.0f) * 10.0f),
                          size,
@@ -2252,13 +2316,29 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
 
     core::Transform transform;
     transform.origin = {0.5f, 0.5f};
-    transform.rotate = state.starYaw * 0.08f;
-    transform.rotateX = state.starPitch * 0.64f;
-    transform.rotateY = state.starYaw * 0.78f;
-    transform.translate = {state.starYaw * 22.0f, state.starPitch * 14.0f - pressed * 5.0f};
-    transform.translateZ = 42.0f + pressed * 18.0f;
-    transform.perspective = 520.0f;
-    transform.scale = {1.0f + pressed * 0.035f, 1.0f + pressed * 0.035f};
+    transform.rotate = state.starYaw * 0.06f;
+    transform.rotateX = state.starPitch * 0.72f;
+    transform.rotateY = state.starYaw * 0.86f;
+    transform.translate = {state.starYaw * 19.0f, state.starPitch * 13.0f - pressed * 4.0f};
+    transform.translateZ = 52.0f + pressed * 20.0f;
+    transform.perspective = 560.0f;
+    transform.scale = {1.015f + pressed * 0.030f, 1.015f + pressed * 0.030f};
+
+    core::Transform sideTransform = transform;
+    sideTransform.translate.x += 6.0f - state.starYaw * 10.0f;
+    sideTransform.translate.y += 8.0f - state.starPitch * 6.0f;
+    sideTransform.translateZ -= 26.0f;
+    sideTransform.scale = {0.992f + pressed * 0.018f, 0.992f + pressed * 0.018f};
+    const core::TransformMatrix sideMatrix = matrixForTransform(visual, sideTransform);
+    drawTextureQuadMatrix(state.starTexture.handle,
+                          visual.x,
+                          visual.y,
+                          visual.width,
+                          visual.height,
+                          sideMatrix,
+                          rgba(0.68f, 0.58f, 1.0f, 0.28f * opacity),
+                          0.0f);
+
     const core::TransformMatrix matrix = matrixForTransform(visual, transform);
     drawTextureQuadMatrix(state.starTexture.handle,
                           visual.x,
@@ -2271,13 +2351,13 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
 
     drawStarSparkle(visual.x + visual.width * 0.35f + state.starYaw * 12.0f,
                     visual.y + visual.height * 0.27f + state.starPitch * 10.0f,
-                    9.5f + pulse * 2.2f,
+                    10.5f + pulse * 2.4f,
                     rgba(1.0f, 1.0f, 1.0f, 0.82f),
-                    0.34f * opacity);
+                    0.28f * opacity);
     drawTextFit(stage.x + 26.0f, stage.y + 20.0f, 190.0f, "PREMIUM STAR", 1.04f, tileText(), opacity, 0.78f);
     drawTextRight(stage.x + stage.width - 26.0f,
                   stage.y + 20.0f,
-                  state.pressedStar ? "DRAG" : "TOUCH",
+                  state.pressedStar ? "FLOAT" : "DEPTH",
                   0.92f,
                   rgba(0.98f, 0.96f, 1.0f, 0.86f),
                   opacity);
@@ -2298,8 +2378,8 @@ void renderMotionPage(PanelState& state, float contentX, float contentY, float c
         drawRect(contentX + 30.0f, premiumNoteY, contentW - 60.0f, 64.0f, 18.0f,
                  rgba(accent.r, accent.g, accent.b, 0.12f * opacity),
                  {1.0f, rgba(accent.r, accent.g, accent.b, 0.26f * opacity)});
-        drawTextFit(contentX + 52.0f, premiumNoteY + 17.0f, contentW - 116.0f, "DYNAMIC TEXTURE  PERSPECTIVE  TOUCH CAPTURE", 0.98f, tileText(), opacity, 0.74f);
-        drawTextFit(contentX + 52.0f, premiumNoteY + 39.0f, contentW - 116.0f, "Pearl shading, depth folds and spark fields stay clipped in stage.", 0.82f, tileTextSoft(), opacity, 0.64f);
+        drawTextFit(contentX + 52.0f, premiumNoteY + 17.0f, contentW - 116.0f, "PEARL FOLD  GLASS STAGE  MOTION FIELD", 0.98f, tileText(), opacity, 0.74f);
+        drawTextFit(contentX + 52.0f, premiumNoteY + 39.0f, contentW - 116.0f, "Soft bloom and depth light stay inside the stage frame.", 0.82f, tileTextSoft(), opacity, 0.64f);
     }
 }
 
@@ -2490,7 +2570,7 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
                 }
             }
         } else if (state.selected == 2) {
-            if (contains(starHitRect, pointer.x, pointer.y) && pointer.y >= scrollTop && pointer.y <= scrollBottom) {
+            if (contains(starHitRect, pointer.x, pointer.y) && pointer.y >= scrollTop - 8.0f && pointer.y <= scrollBottom + 8.0f) {
                 state.capturedStar = true;
             }
         }
@@ -2558,12 +2638,14 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
 
     if (state.selected == 2) {
         if (pointer.down && state.capturedStar) {
-            state.starTargetYaw = std::clamp(state.starTargetYaw + static_cast<float>(pointer.deltaX) * 0.010f, -0.72f, 0.72f);
-            state.starTargetPitch = std::clamp(state.starTargetPitch + static_cast<float>(pointer.deltaY) * 0.009f, -0.58f, 0.58f);
+            if (!pointer.pressedThisFrame) {
+                state.starTargetYaw = std::clamp(state.starTargetYaw - static_cast<float>(pointer.deltaX) * 0.010f, -0.72f, 0.72f);
+                state.starTargetPitch = std::clamp(state.starTargetPitch - static_cast<float>(pointer.deltaY) * 0.009f, -0.58f, 0.58f);
+            }
             interacting = true;
         } else if (!pointer.down) {
-            state.starTargetYaw = approach(state.starTargetYaw, -0.18f, deltaSeconds, 2.2f);
-            state.starTargetPitch = approach(state.starTargetPitch, -0.12f, deltaSeconds, 2.2f);
+            state.starTargetYaw = approach(state.starTargetYaw, kStarRestYaw, deltaSeconds, 1.45f);
+            state.starTargetPitch = approach(state.starTargetPitch, kStarRestPitch, deltaSeconds, 1.45f);
         }
     }
 
@@ -2597,8 +2679,16 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     state.targetScroll = std::clamp(state.targetScroll, 0.0f, pageScrollLimit(state.selected));
     state.contentScroll = approach(state.contentScroll, state.targetScroll, deltaSeconds, 13.5f);
     state.navBlend = approach(state.navBlend, static_cast<float>(state.selected), deltaSeconds, 10.0f);
-    state.starYaw = approach(state.starYaw, state.starTargetYaw, deltaSeconds, state.pressedStar ? 18.0f : 7.5f);
-    state.starPitch = approach(state.starPitch, state.starTargetPitch, deltaSeconds, state.pressedStar ? 18.0f : 7.5f);
+    state.starPressAmount = approach(state.starPressAmount, state.pressedStar ? 1.0f : 0.0f, deltaSeconds, 13.0f);
+    if (state.pressedStar) {
+        state.starYaw = approach(state.starYaw, state.starTargetYaw, deltaSeconds, 20.0f);
+        state.starPitch = approach(state.starPitch, state.starTargetPitch, deltaSeconds, 20.0f);
+        state.starYawVelocity = 0.0f;
+        state.starPitchVelocity = 0.0f;
+    } else {
+        state.starYaw = springApproach(state.starYaw, state.starTargetYaw, state.starYawVelocity, deltaSeconds, 58.0f, 11.0f);
+        state.starPitch = springApproach(state.starPitch, state.starTargetPitch, state.starPitchVelocity, deltaSeconds, 58.0f, 11.0f);
+    }
     state.launchTime += deltaSeconds;
     state.previousDown = pointer.down;
 }
