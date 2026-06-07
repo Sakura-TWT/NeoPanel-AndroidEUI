@@ -35,4 +35,4 @@ EUI-NEO fallback font -> embedded_ui_font.cpp
 neopanel_android
 ```
 
-`build/android` 下不应出现 `picture/` 或 `libc++_shared.so`。
+
