@@ -1,0 +1,15 @@
+NeoPanel Android ELF
+
+This project is an Android root ELF port and custom panel implementation built with EUI-NE rendering concepts and primitives.
+
+Required upstream attribution:
+
+https://github.com/sudoevolve/EUI-NE
+
+Active Git submodule remote:
+
+https://github.com/sudoevolve/EUI-NEO
+
+The local upstream EUI-NE source used during development carried an Apache License 2.0 LICENSE file. Verify the current upstream license before public redistribution.
+
+The Android ELF Port Kit files under third_party/eui-neo-android-elf-port-kit document and provide Android Surface, Vulkan, and input integration used by this project.

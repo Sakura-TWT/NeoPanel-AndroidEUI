@@ -1,0 +1,34 @@
+# Build products
+build/
+out/
+dist/
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+*.pdb
+
+# Android ELF output
+neopanel_android
+*.log
+
+# CMake/Ninja local files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Local tool and editor state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+
+# Optional non-submodule local upstream copies.
+third_party/EUI-NEO-0.4.0/
+third_party/EUI-NE-local/

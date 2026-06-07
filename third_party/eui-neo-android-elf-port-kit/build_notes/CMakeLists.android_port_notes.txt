@@ -1,0 +1,173 @@
+# CMake Android ELF Port Notes
+
+本文件记录将 EUI-NEO 接入 Android ELF 后端时，CMake 需要做的核心改动。
+不包含设备路径，适合在 Windows / Linux / macOS 上作为移植参考。
+
+---
+
+## 1. 增加 Android window backend
+
+原项目通常只有：
+
+```text
+glfw
+sdl2
+```
+
+需要增加：
+
+```text
+android
+```
+
+例如：
+
+```cmake
+set_property(CACHE EUI_WINDOW_BACKEND PROPERTY STRINGS glfw sdl2 android)
+```
+
+或在后端选择逻辑中允许：
+
+```text
+EUI_WINDOW_BACKEND=android
+```
+
+---
+
+## 2. Android 后端源文件
+
+Android 后端需要加入：
+
+```text
+core/window/android_window_backend.cpp
+core/app/android_elf_app_main.cpp
+```
+
+桌面后端源文件：
+
+```text
+core/window/window_backend.cpp
+core/app/sdl2_app_main.cpp
+core/app/glfw_app_main.cpp
+```
+
+Android 下不应参与同一个 executable 的入口构建。
+
+---
+
+## 3. Android 编译定义
+
+Android backend 需要定义：
+
+```cmake
+target_compile_definitions(eui_neo PUBLIC
+    EUI_WINDOW_BACKEND_ANDROID=1
+)
+```
+
+Vulkan backend 需要定义：
+
+```cmake
+target_compile_definitions(eui_neo PUBLIC
+    EUI_RENDER_BACKEND_VULKAN=1
+)
+```
+
+---
+
+## 4. Android 链接库
+
+Android + Vulkan ELF 需要链接：
+
+```cmake
+target_link_libraries(target PRIVATE
+    vulkan
+    android
+    log
+)
+```
+
+通常还需要 `libc++_shared.so` 随 ELF 一起部署，除非使用静态 libc++。
+
+---
+
+## 5. Android 下跳过桌面依赖
+
+Android ELF 后端不需要：
+
+```text
+GLFW
+SDL2
+OpenGL::GL
+glad
+GTK
+AppIndicator
+```
+
+所以 CMake 中应避免 Android 下查找或链接这些桌面依赖。
+
+---
+
+## 6. Vulkan package
+
+桌面平台可使用：
+
+```cmake
+find_package(Vulkan REQUIRED)
+```
+
+Android 下可以不强制使用 `Vulkan::Vulkan` imported target，而是直接链接：
+
+```text
+vulkan
+```
+
+---
+
+## 7. examples 构建
+
+原 EUI-NEO 的 examples 通常每个 `.cpp` 生成一个 executable。
+
+Android ELF 下仍可保持这个模式，只是入口 main 不来自 example，而来自：
+
+```text
+core/app/android_elf_app_main.cpp
+```
+
+example 提供：
+
+```cpp
+namespace app {
+    const DslAppConfig& config();
+    void initialize(...);
+    void compose(...);
+    void shutdown();
+}
+```
+
+---
+
+## 8. 推荐 Android 后端目标结构
+
+每个 example executable 需要包含：
+
+```text
+example.cpp
+core/app/android_elf_app_main.cpp
+```
+
+并链接：
+
+```text
+eui_neo
+vulkan
+android
+log
+```
+
+---
+
+## 9. 注意
+
+本说明是 CMake 改动摘要，不是完整 CMakeLists.txt。
+如果要迁移到新版本 EUI-NEO，应按此说明修改原项目构建逻辑。
