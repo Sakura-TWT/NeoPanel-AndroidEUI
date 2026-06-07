@@ -35,11 +35,12 @@ constexpr float kShellRadius = 56.0f;
 constexpr int kGraphSamples = 56;
 constexpr float kFpsMin = 30.0f;
 constexpr float kFpsMax = 120.0f;
+constexpr float kPi = 3.14159265358979323846f;
+constexpr int kStarTextureSize = 240;
 
 bool gChinese = false;
 bool gNight = true;
 float gTargetFps = 90.0f;
-int gSceneMode = 0;
 
 struct EmbeddedTexture {
     core::render::RenderBackend::TextureHandle handle = nullptr;
@@ -48,6 +49,21 @@ struct EmbeddedTexture {
     bool decoded = false;
     bool uploaded = false;
     std::vector<unsigned char> pixels;
+};
+
+struct StarRenderTexture {
+    core::render::RenderBackend::TextureHandle handle = nullptr;
+    int width = 0;
+    int height = 0;
+    bool baseReady = false;
+    std::vector<unsigned char> pixels;
+    std::vector<float> alpha;
+    std::vector<float> glow;
+    std::vector<float> heightMap;
+    std::vector<float> edge;
+    std::vector<float> normalX;
+    std::vector<float> normalY;
+    std::vector<float> normalZ;
 };
 
 struct RuntimeStats {
@@ -70,8 +86,6 @@ struct PanelState {
     int capturedDemoButton = -1;
     int demoButton = 0;
     int activeControl = 0;
-    int pressedSceneMode = -1;
-    int capturedSceneMode = -1;
     bool pressedLanguage = false;
     bool capturedLanguage = false;
     bool pressedTheme = false;
@@ -80,8 +94,14 @@ struct PanelState {
     bool capturedDemoSwitch = false;
     bool capturedDemoSlider = false;
     bool capturedFpsSlider = false;
+    bool pressedStar = false;
+    bool capturedStar = false;
     bool demoSwitch = true;
     float demoSlider = 0.44f;
+    float starYaw = -0.18f;
+    float starPitch = -0.12f;
+    float starTargetYaw = -0.18f;
+    float starTargetPitch = -0.12f;
     float navBlend = 0.0f;
     float contentScroll = 0.0f;
     float targetScroll = 0.0f;
@@ -93,6 +113,7 @@ struct PanelState {
     std::array<float, kGraphSamples> fpsSamples{};
     std::array<float, kGraphSamples> cpuSamples{};
     int graphCursor = 0;
+    StarRenderTexture starTexture;
 };
 
 struct NavItem {
@@ -221,6 +242,19 @@ float easeOutBack(float t) {
     return 1.0f + c3 * p * p * p + c1 * p * p;
 }
 
+float smoothstep(float edge0, float edge1, float value) {
+    const float t = std::clamp((value - edge0) / std::max(0.0001f, edge1 - edge0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float fract(float value) {
+    return value - std::floor(value);
+}
+
+unsigned char byteFromFloat(float value) {
+    return static_cast<unsigned char>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+}
+
 bool contains(const core::Rect& rect, double x, double y) {
     return rect.contains(x, y);
 }
@@ -228,23 +262,23 @@ bool contains(const core::Rect& rect, double x, double y) {
 void clearPointerCaptures(PanelState& state) {
     state.capturedNav = -1;
     state.capturedDemoButton = -1;
-    state.capturedSceneMode = -1;
     state.capturedLanguage = false;
     state.capturedTheme = false;
     state.capturedDemoSwitch = false;
     state.capturedDemoSlider = false;
     state.capturedFpsSlider = false;
+    state.capturedStar = false;
 }
 
 bool hasPointerCapture(const PanelState& state) {
     return state.capturedNav >= 0 ||
            state.capturedDemoButton >= 0 ||
-           state.capturedSceneMode >= 0 ||
            state.capturedLanguage ||
            state.capturedTheme ||
            state.capturedDemoSwitch ||
            state.capturedDemoSlider ||
-           state.capturedFpsSlider;
+           state.capturedFpsSlider ||
+           state.capturedStar;
 }
 
 const char* tr(const char* en, const char* zh) {
@@ -324,12 +358,17 @@ core::Rect expandedRect(core::Rect rect, float amount) {
     return {rect.x - amount, rect.y - amount, rect.width + amount * 2.0f, rect.height + amount * 2.0f};
 }
 
-core::Rect sceneModeRect(int index, float contentX, float contentW, float stageY) {
-    constexpr float buttonW = 74.0f;
-    constexpr float gap = 8.0f;
-    constexpr float totalW = buttonW * 3.0f + gap * 2.0f;
-    const float startX = contentX + contentW - 30.0f - totalW;
-    return {startX + static_cast<float>(index) * (buttonW + gap), stageY + 22.0f, buttonW, 32.0f};
+core::Rect premiumStarStageRect(float contentX, float contentW, float stageY) {
+    return {contentX + 30.0f, stageY, contentW - 60.0f, 284.0f};
+}
+
+core::Rect premiumStarVisualRect(float contentX, float contentW, float stageY) {
+    constexpr float size = 236.0f;
+    return {contentX + contentW * 0.5f - size * 0.5f, stageY + 44.0f, size, size};
+}
+
+core::Rect premiumStarHitRect(float contentX, float contentW, float stageY) {
+    return expandedRect(premiumStarVisualRect(contentX, contentW, stageY), 26.0f);
 }
 
 core::Rect demoButtonRect(int index, float x, float y, float width) {
@@ -961,6 +1000,234 @@ void drawTextureQuad(core::render::RenderBackend::TextureHandle handle,
         vertices[static_cast<std::size_t>(offset + 6)] = uvs[index][1];
     }
     backend->drawTexture(handle, vertices.data(), vertices.size(), tint, {x, y, width, height}, radius, kPanelWidth, kPanelHeight);
+}
+
+void drawTextureQuadMatrix(core::render::RenderBackend::TextureHandle handle,
+                           float x,
+                           float y,
+                           float width,
+                           float height,
+                           const core::TransformMatrix& matrix,
+                           const core::Color& tint,
+                           float radius = 0.0f) {
+    if (handle == nullptr || width <= 0.0f || height <= 0.0f || tint.a <= 0.001f) {
+        return;
+    }
+    core::render::RenderBackend* backend = core::render::activeRenderBackend();
+    if (backend == nullptr) {
+        return;
+    }
+    const float localPositions[4][2] = {
+        {x, y},
+        {x + width, y},
+        {x + width, y + height},
+        {x, y + height},
+    };
+    constexpr float uvs[4][2] = {
+        {0.0f, 0.0f},
+        {1.0f, 0.0f},
+        {1.0f, 1.0f},
+        {0.0f, 1.0f},
+    };
+    constexpr int order[6] = {0, 1, 2, 0, 2, 3};
+    std::array<float, 42> vertices{};
+    for (int i = 0; i < 6; ++i) {
+        const int index = order[i];
+        const int offset = i * 7;
+        const core::Vec3 projected = core::transformPointWithW(matrix, localPositions[index][0], localPositions[index][1]);
+        vertices[static_cast<std::size_t>(offset + 0)] = projected.x;
+        vertices[static_cast<std::size_t>(offset + 1)] = projected.y;
+        vertices[static_cast<std::size_t>(offset + 2)] = projected.z;
+        vertices[static_cast<std::size_t>(offset + 3)] = localPositions[index][0];
+        vertices[static_cast<std::size_t>(offset + 4)] = localPositions[index][1];
+        vertices[static_cast<std::size_t>(offset + 5)] = uvs[index][0];
+        vertices[static_cast<std::size_t>(offset + 6)] = uvs[index][1];
+    }
+    backend->drawTexture(handle, vertices.data(), vertices.size(), tint, {x, y, width, height}, radius, kPanelWidth, kPanelHeight);
+}
+
+float hash01(float value) {
+    return fract(std::sin(value * 12.9898f + 78.233f) * 43758.5453f);
+}
+
+core::Vec3 normalize3(core::Vec3 value) {
+    const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+    if (length <= 0.0001f) {
+        return {0.0f, 0.0f, 1.0f};
+    }
+    const float inv = 1.0f / length;
+    return {value.x * inv, value.y * inv, value.z * inv};
+}
+
+float dot3(const core::Vec3& a, const core::Vec3& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+core::Vec3 rotateNormal(float x, float y, float z, float pitch, float yaw) {
+    const float cosY = std::cos(yaw);
+    const float sinY = std::sin(yaw);
+    const float cosX = std::cos(pitch);
+    const float sinX = std::sin(pitch);
+
+    const float rx = x * cosY + z * sinY;
+    const float rz = -x * sinY + z * cosY;
+    return {
+        rx,
+        y * cosX - rz * sinX,
+        y * sinX + rz * cosX
+    };
+}
+
+float premiumStarRadius(float angle) {
+    const float wave = 0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f));
+    const float point = std::pow(std::max(0.0f, wave), 1.38f);
+    const float secondary = std::pow(std::max(0.0f, wave), 4.2f);
+    return 0.405f + point * 0.405f + secondary * 0.050f;
+}
+
+void buildPremiumStarBase(StarRenderTexture& texture) {
+    if (texture.baseReady) {
+        return;
+    }
+
+    texture.width = kStarTextureSize;
+    texture.height = kStarTextureSize;
+    const int count = texture.width * texture.height;
+    texture.pixels.assign(static_cast<std::size_t>(count) * 4u, 0u);
+    texture.alpha.assign(static_cast<std::size_t>(count), 0.0f);
+    texture.glow.assign(static_cast<std::size_t>(count), 0.0f);
+    texture.heightMap.assign(static_cast<std::size_t>(count), 0.0f);
+    texture.edge.assign(static_cast<std::size_t>(count), 0.0f);
+    texture.normalX.assign(static_cast<std::size_t>(count), 0.0f);
+    texture.normalY.assign(static_cast<std::size_t>(count), 0.0f);
+    texture.normalZ.assign(static_cast<std::size_t>(count), 1.0f);
+
+    for (int y = 0; y < texture.height; ++y) {
+        for (int x = 0; x < texture.width; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(texture.width) * 2.0f - 1.0f;
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(texture.height) * 2.0f - 1.0f;
+            const float radius = std::sqrt(u * u + v * v);
+            const float angle = std::atan2(v, u);
+            const float starRadius = premiumStarRadius(angle);
+            const float signedDistance = radius - starRadius;
+            const float alpha = 1.0f - smoothstep(-0.014f, 0.024f, signedDistance);
+            const float outsideGlow = std::exp(-std::max(0.0f, signedDistance) * std::max(0.0f, signedDistance) * 30.0f);
+            const float innerDistance = std::max(0.0f, -signedDistance);
+            const float edge = smoothstep(0.0f, 0.165f, innerDistance);
+            const float ridge = std::pow(0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f)), 2.5f);
+            const float dome = std::pow(std::max(0.0f, 1.0f - radius * 0.68f), 1.6f);
+            const float tipLift = ridge * smoothstep(0.36f, 0.82f, radius / std::max(0.001f, starRadius));
+            const float valleyFold = (1.0f - ridge) * smoothstep(0.40f, 0.95f, radius / std::max(0.001f, starRadius));
+            const float height = alpha * std::clamp(0.10f + edge * 0.58f + dome * 0.28f + tipLift * 0.18f - valleyFold * 0.08f,
+                                                    0.0f,
+                                                    1.0f);
+            const std::size_t index = static_cast<std::size_t>(y * texture.width + x);
+            texture.alpha[index] = alpha;
+            texture.glow[index] = outsideGlow * 0.42f * (1.0f - alpha);
+            texture.heightMap[index] = height;
+            texture.edge[index] = edge;
+        }
+    }
+
+    for (int y = 0; y < texture.height; ++y) {
+        for (int x = 0; x < texture.width; ++x) {
+            const int left = std::max(0, x - 1);
+            const int right = std::min(texture.width - 1, x + 1);
+            const int up = std::max(0, y - 1);
+            const int down = std::min(texture.height - 1, y + 1);
+            const float dx = texture.heightMap[static_cast<std::size_t>(y * texture.width + right)] -
+                             texture.heightMap[static_cast<std::size_t>(y * texture.width + left)];
+            const float dy = texture.heightMap[static_cast<std::size_t>(down * texture.width + x)] -
+                             texture.heightMap[static_cast<std::size_t>(up * texture.width + x)];
+            const core::Vec3 normal = normalize3({-dx * 5.2f, -dy * 5.2f, 1.0f});
+            const std::size_t index = static_cast<std::size_t>(y * texture.width + x);
+            texture.normalX[index] = normal.x;
+            texture.normalY[index] = normal.y;
+            texture.normalZ[index] = normal.z;
+        }
+    }
+
+    texture.baseReady = true;
+}
+
+void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float timeSeconds, bool pressed) {
+    buildPremiumStarBase(texture);
+
+    core::render::RenderBackend* backend = core::render::activeRenderBackend();
+    if (backend == nullptr) {
+        return;
+    }
+
+    const core::Vec3 light = normalize3({-0.40f + yaw * 0.40f, -0.62f - pitch * 0.24f, 0.92f});
+    const core::Vec3 view = {0.0f, 0.0f, 1.0f};
+    const core::Vec3 halfVector = normalize3({light.x + view.x, light.y + view.y, light.z + view.z});
+    const float pressGlow = pressed ? 1.0f : 0.0f;
+
+    for (int y = 0; y < texture.height; ++y) {
+        for (int x = 0; x < texture.width; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y * texture.width + x);
+            const std::size_t pixel = index * 4u;
+            const float alpha = texture.alpha[index];
+            const float glow = texture.glow[index];
+            if (alpha <= 0.001f && glow <= 0.001f) {
+                texture.pixels[pixel + 0] = 0u;
+                texture.pixels[pixel + 1] = 0u;
+                texture.pixels[pixel + 2] = 0u;
+                texture.pixels[pixel + 3] = 0u;
+                continue;
+            }
+
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(texture.width) * 2.0f - 1.0f;
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(texture.height) * 2.0f - 1.0f;
+            const core::Vec3 normal = normalize3(rotateNormal(texture.normalX[index],
+                                                              texture.normalY[index],
+                                                              texture.normalZ[index],
+                                                              pitch * 0.58f,
+                                                              yaw * 0.72f));
+            const float diffuse = std::max(0.0f, dot3(normal, light));
+            const float broad = std::pow(std::max(0.0f, dot3(normal, halfVector)), 6.0f);
+            const float spec = std::pow(std::max(0.0f, dot3(normal, halfVector)), 38.0f);
+            const float edgeTint = 1.0f - texture.edge[index];
+            const float diagonal = 1.0f - smoothstep(0.010f, 0.090f, std::fabs(u * 0.72f + v * 0.48f + 0.11f - yaw * 0.06f));
+            const float topFlash = std::exp(-((u + 0.24f - yaw * 0.10f) * (u + 0.24f - yaw * 0.10f) * 12.0f +
+                                             (v + 0.36f + pitch * 0.08f) * (v + 0.36f + pitch * 0.08f) * 18.0f));
+            const float pearlescent = 0.5f + 0.5f * std::sin((u - v) * 5.0f + timeSeconds * 0.72f);
+            const float shade = 0.58f + diffuse * 0.44f + broad * 0.20f + spec * 0.58f + diagonal * 0.14f + topFlash * 0.28f;
+            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.7f) * 0.22f + edgeTint * 0.20f;
+            const float warmth = 0.36f + 0.22f * pearlescent + yaw * 0.10f;
+
+            float r = 0.72f + shade * 0.24f + rim * 0.18f + topFlash * 0.14f;
+            float g = 0.76f + shade * 0.20f + rim * 0.12f;
+            float b = 0.98f + shade * 0.14f + rim * 0.10f;
+            r += warmth * 0.08f + pressGlow * 0.025f;
+            g += (1.0f - warmth) * 0.05f + pressGlow * 0.018f;
+            b += 0.05f + pressGlow * 0.020f;
+
+            const float shadow = smoothstep(-0.12f, 0.72f, v + pitch * 0.20f) * (0.18f + edgeTint * 0.16f);
+            r -= shadow * 0.20f;
+            g -= shadow * 0.18f;
+            b -= shadow * 0.11f;
+
+            if (alpha <= 0.001f) {
+                texture.pixels[pixel + 0] = byteFromFloat(0.72f + 0.10f * pearlescent);
+                texture.pixels[pixel + 1] = byteFromFloat(0.68f + 0.14f * pearlescent);
+                texture.pixels[pixel + 2] = byteFromFloat(1.0f);
+                texture.pixels[pixel + 3] = byteFromFloat(glow * (0.30f + pressGlow * 0.16f));
+                continue;
+            }
+
+            texture.pixels[pixel + 0] = byteFromFloat(r);
+            texture.pixels[pixel + 1] = byteFromFloat(g);
+            texture.pixels[pixel + 2] = byteFromFloat(b);
+            texture.pixels[pixel + 3] = byteFromFloat(std::max(alpha, glow * 0.42f));
+        }
+    }
+
+    if (texture.handle == nullptr) {
+        texture.handle = backend->createTexture(texture.pixels.data(), texture.width, texture.height);
+    } else {
+        backend->updateTexture(texture.handle, texture.pixels.data(), texture.width, texture.height);
+    }
 }
 
 FontGlyph* ensureFontGlyph(std::uint32_t codepoint, int pixelHeight) {
@@ -1927,112 +2194,112 @@ void renderTelemetryPage(PanelState& state, float contentX, float contentY, floa
     renderFpsSlider(contentX, contentW, top, opacity);
 }
 
-void renderSceneModeSelector(const PanelState& state, float contentX, float contentW, float stageY, float opacity) {
-    const core::Color accent = pageAccent(2);
-    const std::array<LocalText, 3> labels{{{"MOVE", "位移"}, {"FLIP X", "翻转"}, {"DEPTH", "景深"}}};
-    for (int i = 0; i < 3; ++i) {
-        const core::Rect r = sceneModeRect(i, contentX, contentW, stageY);
-        const bool active = gSceneMode == i;
-        const bool pressed = state.pressedSceneMode == i;
-        drawRect(r.x, r.y, r.width, r.height, 15.0f,
-                 active ? rgba(accent.r, accent.g, accent.b, (0.30f + (pressed ? 0.06f : 0.0f)) * opacity) : softTile(opacity),
-                 {1.0f, active ? rgba(accent.r, accent.g, accent.b, 0.48f * opacity) : rgba(1.0f, 1.0f, 1.0f, 0.12f * opacity)});
-        drawTextCenteredFit(r.x + r.width * 0.5f, r.y + 9.0f + (pressed ? 1.0f : 0.0f), r.width - 12.0f, tr(labels[static_cast<std::size_t>(i)]), 0.84f,
-                            active ? rgba(0.96f, 0.98f, 1.0f, 1.0f) : textSoft(), opacity, 0.66f);
-    }
+void drawStarSparkle(float x, float y, float size, const core::Color& color, float opacity) {
+    drawLine(x, y - size, x, y + size, size * 0.12f, color, opacity);
+    drawLine(x - size, y, x + size, y, size * 0.12f, color, opacity);
+    drawLine(x - size * 0.46f, y - size * 0.46f, x + size * 0.46f, y + size * 0.46f, size * 0.075f, color, opacity * 0.62f);
+    drawLine(x + size * 0.46f, y - size * 0.46f, x - size * 0.46f, y + size * 0.46f, size * 0.075f, color, opacity * 0.62f);
+    drawAccentDot(x, y, size * 0.11f, rgba(1.0f, 1.0f, 1.0f, color.a), opacity);
 }
 
-void renderPerspectiveCard(float x,
-                           float y,
-                           float width,
-                           float height,
-                           const core::Transform& transform,
-                           const core::Color& accent,
-                           float opacity) {
-    const core::TransformMatrix matrix = matrixForTransform({x, y, width, height}, transform);
-    core::Gradient gradient;
-    gradient.enabled = true;
-    gradient.start = rgba(accent.r, accent.g, accent.b, 0.78f * opacity);
-    gradient.end = rgba(0.34f, 0.68f, 0.94f, 0.42f * opacity);
-    gradient.direction = core::GradientDirection::Horizontal;
+void renderPremiumStarStage(PanelState& state, float contentX, float contentW, float stageY, float opacity) {
+    const core::Color accent = pageAccent(2);
+    const core::Rect stage = premiumStarStageRect(contentX, contentW, stageY);
+    const core::Rect visual = premiumStarVisualRect(contentX, contentW, stageY);
+    const float pressed = state.pressedStar ? 1.0f : 0.0f;
+    const float pulse = std::sin(state.launchTime * 2.1f) * 0.5f + 0.5f;
 
-    drawRect(x + 16.0f + transform.translate.x * 0.20f, y + height + 20.0f, width - 28.0f, 12.0f, 6.0f,
-             rgba(accent.r, accent.g, accent.b, 0.13f * opacity), {}, {}, {}, opacity, 9.0f);
-    drawRectMatrix(x, y, width, height, 24.0f,
-                   rgba(accent.r, accent.g, accent.b, 0.70f * opacity),
-                   matrix,
-                   {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.32f * opacity)},
-                   {true, {0.0f, 18.0f}, 30.0f, 0.0f, rgba(accent.r, accent.g, accent.b, 0.22f * opacity)},
-                   gradient);
-    drawRectMatrix(x + 24.0f, y + 24.0f, width * 0.34f, 30.0f, 12.0f,
-                   rgba(0.98f, 0.98f, 1.0f, 0.84f * opacity),
-                   matrix);
-    drawRectMatrix(x + width * 0.56f, y + 24.0f, width * 0.24f, 30.0f, 12.0f,
-                   rgba(0.34f, 0.68f, 0.94f, 0.70f * opacity),
-                   matrix);
-    drawRectMatrix(x + 24.0f, y + height - 54.0f, width * 0.52f, 12.0f, 6.0f,
-                   rgba(1.0f, 1.0f, 1.0f, 0.54f * opacity),
-                   matrix);
-    drawRectMatrix(x + 24.0f, y + height - 32.0f, width * 0.40f, 10.0f, 5.0f,
-                   rgba(1.0f, 1.0f, 1.0f, 0.34f * opacity),
-                   matrix);
-    drawRectMatrix(x + width - 76.0f, y + height - 74.0f, 48.0f, 48.0f, 14.0f,
-                   rgba(0.98f, 0.82f, 0.94f, 0.68f * opacity),
-                   matrix,
-                   {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.28f * opacity)});
+    core::Gradient stageGradient;
+    stageGradient.enabled = true;
+    stageGradient.start = gNight ? rgba(0.34f, 0.36f, 1.0f, 0.20f * opacity) : rgba(0.48f, 0.58f, 1.0f, 0.14f * opacity);
+    stageGradient.end = gNight ? rgba(0.94f, 0.34f, 0.76f, 0.24f * opacity) : rgba(0.98f, 0.46f, 0.72f, 0.16f * opacity);
+    stageGradient.direction = core::GradientDirection::Horizontal;
+    drawRect(stage.x, stage.y, stage.width, stage.height, 30.0f,
+             rgba(accent.r, accent.g, accent.b, (0.076f + pressed * 0.028f) * opacity),
+             {1.0f, rgba(1.0f, 1.0f, 1.0f, (0.12f + pressed * 0.06f) * opacity)},
+             {true, {0.0f, 18.0f}, 34.0f, 0.0f, rgba(0.10f, 0.04f, 0.15f, 0.16f * opacity)},
+             stageGradient);
+
+    drawRect(stage.x + 26.0f, stage.y + stage.height - 56.0f, stage.width - 52.0f, 10.0f, 5.0f,
+             rgba(1.0f, 1.0f, 1.0f, 0.13f * opacity), {}, {}, {}, opacity, 12.0f);
+    drawRect(visual.x + 36.0f + state.starYaw * 18.0f,
+             visual.y + visual.height - 18.0f - state.starPitch * 12.0f,
+             visual.width - 72.0f,
+             18.0f,
+             9.0f,
+             rgba(0.16f, 0.10f, 0.26f, 0.30f * opacity),
+             {},
+             {},
+             {},
+             opacity,
+             18.0f);
+
+    for (int i = 0; i < 28; ++i) {
+        const float seed = static_cast<float>(i) * 17.0f + 3.0f;
+        const float px = stage.x + 38.0f + hash01(seed) * (stage.width - 76.0f);
+        const float py = stage.y + 34.0f + hash01(seed + 9.0f) * (stage.height - 90.0f);
+        const float shimmer = smoothstep(0.08f, 1.0f, 0.5f + 0.5f * std::sin(state.launchTime * (1.3f + hash01(seed + 4.0f) * 1.8f) + seed));
+        const float size = 1.4f + hash01(seed + 2.0f) * 3.8f;
+        const float op = (0.10f + shimmer * 0.34f) * opacity;
+        drawStarSparkle(px + state.starYaw * (6.0f + hash01(seed + 5.0f) * 12.0f),
+                         py - state.starPitch * (4.0f + hash01(seed + 6.0f) * 10.0f),
+                         size,
+                         rgba(0.98f, 0.96f, 1.0f, 0.82f),
+                         op);
+    }
+
+    shadePremiumStar(state.starTexture, state.starPitch, state.starYaw, state.launchTime, state.pressedStar);
+
+    core::Transform transform;
+    transform.origin = {0.5f, 0.5f};
+    transform.rotate = state.starYaw * 0.08f;
+    transform.rotateX = state.starPitch * 0.64f;
+    transform.rotateY = state.starYaw * 0.78f;
+    transform.translate = {state.starYaw * 22.0f, state.starPitch * 14.0f - pressed * 5.0f};
+    transform.translateZ = 42.0f + pressed * 18.0f;
+    transform.perspective = 520.0f;
+    transform.scale = {1.0f + pressed * 0.035f, 1.0f + pressed * 0.035f};
+    const core::TransformMatrix matrix = matrixForTransform(visual, transform);
+    drawTextureQuadMatrix(state.starTexture.handle,
+                          visual.x,
+                          visual.y,
+                          visual.width,
+                          visual.height,
+                          matrix,
+                          rgba(1.0f, 1.0f, 1.0f, opacity),
+                          0.0f);
+
+    drawStarSparkle(visual.x + visual.width * 0.35f + state.starYaw * 12.0f,
+                    visual.y + visual.height * 0.27f + state.starPitch * 10.0f,
+                    9.5f + pulse * 2.2f,
+                    rgba(1.0f, 1.0f, 1.0f, 0.82f),
+                    0.34f * opacity);
+    drawTextFit(stage.x + 26.0f, stage.y + 20.0f, 190.0f, "PREMIUM STAR", 1.04f, tileText(), opacity, 0.78f);
+    drawTextRight(stage.x + stage.width - 26.0f,
+                  stage.y + 20.0f,
+                  state.pressedStar ? "DRAG" : "TOUCH",
+                  0.92f,
+                  rgba(0.98f, 0.96f, 1.0f, 0.86f),
+                  opacity);
 }
 
 void renderMotionPage(PanelState& state, float contentX, float contentY, float contentW, float top, float bottom, float scroll, float opacity) {
     (void)contentY;
     const core::Color accent = pageAccent(2);
     const float stageY = top + 14.0f - scroll;
-    if (itemVisible(stageY, 226.0f, top, bottom)) {
-        drawRect(contentX + 30.0f, stageY, contentW - 60.0f, 226.0f, 28.0f,
-                 rgba(accent.r, accent.g, accent.b, 0.080f * opacity),
-                 {1.0f, rgba(accent.r, accent.g, accent.b, 0.24f * opacity)});
-        drawTextFit(contentX + 52.0f, stageY + 21.0f, 228.0f, tr("PERSPECTIVE CARD", "透视卡片"), 1.16f, tileText(), opacity, 0.82f);
-        drawTextFit(contentX + 52.0f, stageY + 50.0f, 248.0f, tr("rotateX / rotateY / translateZ", "旋转与景深矩阵"), 0.86f, tileTextSoft(), opacity, 0.68f);
-        renderSceneModeSelector(state, contentX, contentW, stageY, opacity);
-
-        const float t = std::sin(state.launchTime * 1.65f) * 0.5f + 0.5f;
-        const float cardX = contentX + 78.0f;
-        const float cardY = stageY + 82.0f;
-        core::Transform transform;
-        transform.origin = {0.5f, 0.5f};
-        transform.translate = {gSceneMode == 0 ? t * 92.0f : 42.0f, gSceneMode == 0 ? -6.0f * t : 0.0f};
-        transform.rotate = gSceneMode == 0 ? -0.05f + t * 0.10f : 0.02f;
-        transform.rotateX = gSceneMode == 1 ? -0.78f + t * 1.56f : -0.18f;
-        transform.rotateY = gSceneMode == 2 ? -0.58f + t * 0.32f : (gSceneMode == 1 ? -0.28f : -0.18f + t * 0.36f);
-        transform.translateZ = gSceneMode == 2 ? 58.0f + t * 32.0f : 26.0f;
-        transform.perspective = 480.0f;
-        transform.scale = {gSceneMode == 2 ? 1.04f : 1.0f, gSceneMode == 2 ? 1.04f : 1.0f};
-        renderPerspectiveCard(cardX, cardY, 218.0f, 112.0f, transform, accent, opacity);
-
-        drawRect(contentX + 58.0f, stageY + 205.0f, contentW - 116.0f, 2.0f, 1.0f, rgba(1.0f, 1.0f, 1.0f, 0.12f * opacity));
-        drawRect(contentX + 58.0f, stageY + 205.0f, (contentW - 116.0f) * (0.18f + t * 0.64f), 2.0f, 1.0f, accent, {}, {}, {}, 0.80f * opacity);
-        drawTextFit(contentX + contentW - 220.0f, stageY + 156.0f, 150.0f,
-                    gSceneMode == 0 ? tr("Move", "位移") : (gSceneMode == 1 ? tr("Flip X", "翻转") : tr("Depth", "景深")),
-                    1.08f,
-                    rgba(0.96f, 0.97f, 1.0f, 0.94f),
-                    opacity,
-                    0.78f);
-        drawTextFit(contentX + contentW - 220.0f, stageY + 184.0f, 158.0f,
-                    gSceneMode == 0 ? tr("translate + ease", "位移与缓动") : (gSceneMode == 1 ? tr("rotateX + perspective", "X 轴透视") : tr("translateZ + depth", "Z 轴景深")),
-                    0.82f,
-                    tileTextSoft(),
-                    opacity,
-                    0.64f);
+    if (itemVisible(stageY, 284.0f, top, bottom)) {
+        renderPremiumStarStage(state, contentX, contentW, stageY, opacity);
     }
 
-    renderEffectTiles(contentX, contentW, 2, top + 270.0f, scroll, top, bottom, opacity);
+    renderEffectTiles(contentX, contentW, 2, top + 328.0f, scroll, top, bottom, opacity);
 
-    const float noteY = top + 472.0f - scroll;
-    if (itemVisible(noteY, 64.0f, top, bottom)) {
-        drawRect(contentX + 30.0f, noteY, contentW - 60.0f, 64.0f, 18.0f,
+    const float premiumNoteY = top + 530.0f - scroll;
+    if (itemVisible(premiumNoteY, 64.0f, top, bottom)) {
+        drawRect(contentX + 30.0f, premiumNoteY, contentW - 60.0f, 64.0f, 18.0f,
                  rgba(accent.r, accent.g, accent.b, 0.12f * opacity),
                  {1.0f, rgba(accent.r, accent.g, accent.b, 0.26f * opacity)});
-        drawTextFit(contentX + 52.0f, noteY + 17.0f, contentW - 116.0f, tr("LAUNCH  BLUR  ELASTIC SCALE  FADE", "入场  模糊  弹性缩放  淡入"), 0.98f, tileText(), opacity, 0.74f);
-        drawTextFit(contentX + 52.0f, noteY + 39.0f, contentW - 116.0f, tr("All motion stays clipped inside the content viewport.", "所有动效保持在内容裁剪区域内"), 0.82f, tileTextSoft(), opacity, 0.64f);
+        drawTextFit(contentX + 52.0f, premiumNoteY + 17.0f, contentW - 116.0f, "DYNAMIC TEXTURE  PERSPECTIVE  TOUCH CAPTURE", 0.98f, tileText(), opacity, 0.74f);
+        drawTextFit(contentX + 52.0f, premiumNoteY + 39.0f, contentW - 116.0f, "Pearl shading, depth folds and spark fields stay clipped in stage.", 0.82f, tileTextSoft(), opacity, 0.64f);
     }
 }
 
@@ -2082,7 +2349,7 @@ float pageScrollLimit(int page) {
         return 0.0f;
     }
     if (page == 2) {
-        return 168.0f;
+        return 226.0f;
     }
     return 54.0f;
 }
@@ -2188,6 +2455,7 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     const float scrollValue = std::clamp(state.contentScroll, 0.0f, pageScrollLimit(state.selected));
     const float demoY0 = scrollTop + 16.0f - scrollValue;
     const float motionStageY = scrollTop + 14.0f - scrollValue;
+    const core::Rect starHitRect = premiumStarHitRect(contentX, contentW, motionStageY);
 
     const core::Rect fpsTrackRect = fpsSliderRect(contentX, contentW, scrollTop);
     const core::Rect fpsRect = expandedRect(fpsTrackRect, 18.0f);
@@ -2222,12 +2490,8 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
                 }
             }
         } else if (state.selected == 2) {
-            for (int i = 0; i < 3; ++i) {
-                const core::Rect sceneRect = expandedRect(sceneModeRect(i, contentX, contentW, motionStageY), 8.0f);
-                if (contains(sceneRect, pointer.x, pointer.y)) {
-                    state.capturedSceneMode = i;
-                    break;
-                }
+            if (contains(starHitRect, pointer.x, pointer.y) && pointer.y >= scrollTop && pointer.y <= scrollBottom) {
+                state.capturedStar = true;
             }
         }
 
@@ -2247,8 +2511,8 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     state.pressedLanguage = pointer.down && state.capturedLanguage && contains(languageRect, pointer.x, pointer.y);
     state.pressedTheme = pointer.down && state.capturedTheme && contains(themeRect, pointer.x, pointer.y);
     state.pressedDemoButton = -1;
-    state.pressedSceneMode = -1;
     state.pressedDemoSwitch = pointer.down && state.capturedDemoSwitch && contains(demoSwitchHit, pointer.x, pointer.y);
+    state.pressedStar = pointer.down && state.capturedStar;
     state.activeControl = 0;
 
     if (pointer.down && state.capturedFpsSlider) {
@@ -2293,16 +2557,13 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     }
 
     if (state.selected == 2) {
-        for (int i = 0; i < 3; ++i) {
-            const core::Rect sceneRect = expandedRect(sceneModeRect(i, contentX, contentW, motionStageY), 8.0f);
-            if (pointer.down && state.capturedSceneMode == i && contains(sceneRect, pointer.x, pointer.y)) {
-                state.pressedSceneMode = i;
-                interacting = true;
-            }
-            if (pointer.releasedThisFrame && state.capturedSceneMode == i && contains(sceneRect, pointer.x, pointer.y)) {
-                gSceneMode = i;
-                interacting = true;
-            }
+        if (pointer.down && state.capturedStar) {
+            state.starTargetYaw = std::clamp(state.starTargetYaw + static_cast<float>(pointer.deltaX) * 0.010f, -0.72f, 0.72f);
+            state.starTargetPitch = std::clamp(state.starTargetPitch + static_cast<float>(pointer.deltaY) * 0.009f, -0.58f, 0.58f);
+            interacting = true;
+        } else if (!pointer.down) {
+            state.starTargetYaw = approach(state.starTargetYaw, -0.18f, deltaSeconds, 2.2f);
+            state.starTargetPitch = approach(state.starTargetPitch, -0.12f, deltaSeconds, 2.2f);
         }
     }
 
@@ -2324,6 +2585,7 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
             state.selected = i;
             state.targetScroll = 0.0f;
             state.contentScroll = 0.0f;
+            state.pressedStar = false;
             interacting = true;
         }
     }
@@ -2335,6 +2597,8 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     state.targetScroll = std::clamp(state.targetScroll, 0.0f, pageScrollLimit(state.selected));
     state.contentScroll = approach(state.contentScroll, state.targetScroll, deltaSeconds, 13.5f);
     state.navBlend = approach(state.navBlend, static_cast<float>(state.selected), deltaSeconds, 10.0f);
+    state.starYaw = approach(state.starYaw, state.starTargetYaw, deltaSeconds, state.pressedStar ? 18.0f : 7.5f);
+    state.starPitch = approach(state.starPitch, state.starTargetPitch, deltaSeconds, state.pressedStar ? 18.0f : 7.5f);
     state.launchTime += deltaSeconds;
     state.previousDown = pointer.down;
 }
@@ -2418,6 +2682,10 @@ int main() {
     if (state.avatar.handle != nullptr) {
         backend->destroyTexture(state.avatar.handle);
         state.avatar.handle = nullptr;
+    }
+    if (state.starTexture.handle != nullptr) {
+        backend->destroyTexture(state.starTexture.handle);
+        state.starTexture.handle = nullptr;
     }
     core::releaseInputQueue(window);
     backend.reset();
