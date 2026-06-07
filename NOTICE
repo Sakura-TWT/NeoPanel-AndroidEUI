@@ -2,8 +2,8 @@ NeoPanel Android ELF
 
 This project is an Android root ELF port implementation for EUI-NEO rendering concepts and primitives.
 
-Upstream EUI-NEO submodule:
+Upstream EUI-NEO:
 
 https://github.com/sudoevolve/EUI-NEO
 
-The Android ELF Port Kit files under third_party/eui-neo-android-elf-port-kit document and provide Android Surface, Vulkan, and input integration used by this project.
+The Android ELF adapter code used by NeoPanel lives under src/eui_android_elf.

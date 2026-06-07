@@ -1,18 +1,18 @@
 # 构建与运行
 
-本文记录从源码构建 `neopanel_android`、检查 ELF、推送到设备运行的步骤。命令使用占位符，不绑定具体开发机路径。
+本文记录直接使用 CMake 构建 `neopanel_android` 的步骤。仓库不再提供宿主机包装脚本，避免把开发机环境写进项目入口。
 
 ## 准备源码
 
 首次克隆仓库：
 
-```powershell
+```sh
 git clone --recurse-submodules https://github.com/Sakura-TWT/NeoPanel-Android-ELF
 ```
 
 已有仓库时补齐子模块：
 
-```powershell
+```sh
 git submodule update --init --recursive
 ```
 
@@ -22,41 +22,54 @@ git submodule update --init --recursive
 third_party/EUI-NEO
 ```
 
-也可以通过 `-EuiRoot` 指向本地已有的 EUI-NEO 源码。
+## 准备工具
+
+需要：
+
+```text
+CMake
+Ninja
+Android NDK
+```
+
+`cmake` 和 `ninja` 应在 `PATH` 中。Android NDK 通过环境变量传入，`ANDROID_NDK_HOME` 指向 Android NDK 根目录：
+
+```sh
+export ANDROID_NDK_HOME=<Android NDK 安装目录>
+```
 
 ## 构建
 
-推荐先设置 Android NDK：
+使用 CMake preset：
 
-```powershell
-$env:ANDROID_NDK_HOME = '<Android NDK 安装目录>'
-powershell -ExecutionPolicy Bypass -File .\build_android.ps1
+```sh
+cmake --preset android-arm64-release
+cmake --build --preset android-arm64-release
 ```
 
-如果 CMake 或 Ninja 不在 `PATH` 中：
+如果不用 preset，可以显式写出配置：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
-  -NdkRoot '<Android NDK 安装目录>' `
-  -CMakePath '<cmake.exe 路径>' `
-  -NinjaPath '<ninja.exe 路径>'
+```sh
+cmake -S . -B build/android -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-26 \
+  -DANDROID_STL=c++_static \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build/android --parallel
 ```
 
-如果不用仓库子模块：
+如果要使用本地 EUI-NEO 源码，而不是仓库子模块：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
-  -NdkRoot '<Android NDK 安装目录>' `
-  -EuiRoot '<EUI-NEO 源码目录>'
-```
-
-脚本默认配置：
-
-```text
-ANDROID_ABI=arm64-v8a
-ANDROID_PLATFORM=android-26
-ANDROID_STL=c++_static
-CMAKE_BUILD_TYPE=Release
+```sh
+cmake -S . -B build/android -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DEUI_ROOT=<EUI-NEO 源码目录> \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-26 \
+  -DANDROID_STL=c++_static \
+  -DCMAKE_BUILD_TYPE=Release
 ```
 
 输出文件：
@@ -67,12 +80,13 @@ build/android/neopanel_android
 
 ## 验证 ELF
 
-```powershell
-& "$env:ANDROID_NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-readelf.exe" -h build\android\neopanel_android |
-  Select-String -Pattern 'Class:|Machine:|Type:'
+```sh
+"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-readelf" -h build/android/neopanel_android
 ```
 
-期望结果：
+在 Windows 以外的主机上，把 `windows-x86_64` 换成 NDK 对应的 host 目录。
+
+期望关键信息：
 
 ```text
 Class:   ELF64
@@ -82,11 +96,11 @@ Machine: AArch64
 
 确认没有旁置资源目录或 shared libc++：
 
-```powershell
-Get-ChildItem -Force build\android | Where-Object { $_.Name -like '*c++*' -or $_.Name -eq 'picture' }
+```sh
+ls build/android
 ```
 
-期望无输出。头像和字体已经嵌入 ELF，C++ STL 使用静态链接。
+目录中不应出现 `picture/` 或 `libc++_shared.so`。头像和字体已经嵌入 ELF，C++ STL 使用静态链接。
 
 ## 推送到设备
 
@@ -106,20 +120,20 @@ adb shell su -c "/data/local/tmp/neopanel/deploy_example.sh"
 
 找不到 EUI-NEO：
 
-```powershell
+```sh
 git submodule update --init --recursive
 ```
 
-或者传入：
+或者配置时传入：
 
-```powershell
--EuiRoot '<EUI-NEO 源码目录>'
+```sh
+-DEUI_ROOT=<EUI-NEO 源码目录>
 ```
 
 找不到 Android NDK：
 
-```powershell
-$env:ANDROID_NDK_HOME = '<Android NDK 安装目录>'
+```sh
+export ANDROID_NDK_HOME=<Android NDK 安装目录>
 ```
 
 没有触摸响应：

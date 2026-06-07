@@ -6,19 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(NEOPANEL_DEFAULT_EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/EUI-NEO")
-if(NOT EXISTS "${NEOPANEL_DEFAULT_EUI_ROOT}/include/eui_neo.h")
-    set(NEOPANEL_DEFAULT_EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../EUI-NEO-0.4.0")
-endif()
-
-set(EUI_ROOT "${NEOPANEL_DEFAULT_EUI_ROOT}" CACHE PATH "EUI-NEO source root")
-set(EUI_ANDROID_PORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/eui-neo-android-elf-port-kit" CACHE PATH "EUI Android ELF port kit root")
+set(EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/EUI-NEO" CACHE PATH "EUI-NEO source root")
+set(NEOPANEL_ANDROID_ELF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/eui_android_elf")
 
 if(NOT EXISTS "${EUI_ROOT}/include/eui_neo.h")
-    message(FATAL_ERROR "EUI_ROOT does not point to EUI-NEO-0.4.0")
+    message(FATAL_ERROR "EUI_ROOT does not point to an EUI-NEO source tree. Run `git submodule update --init --recursive` or pass -DEUI_ROOT=<EUI-NEO source root>.")
 endif()
-if(NOT EXISTS "${EUI_ANDROID_PORT_ROOT}/core/platform/android/native_surface/ANativeWindowCreator.h")
-    message(FATAL_ERROR "EUI_ANDROID_PORT_ROOT does not point to EUI-NEO-Android-ELF-Port-Kit")
+if(NOT EXISTS "${NEOPANEL_ANDROID_ELF_ROOT}/core/platform/android/native_surface/ANativeWindowCreator.h")
+    message(FATAL_ERROR "NeoPanel Android ELF adapter files are missing")
 endif()
 
 find_package(Threads REQUIRED)
@@ -47,13 +42,13 @@ add_custom_command(
 )
 
 add_executable(neopanel_android
-    src/main.cpp
-    src/android_window_backend_panel.cpp
+    src/neopanel/main.cpp
+    src/eui_android_elf/core/window/android_window_backend_panel.cpp
     "${NEOPANEL_EMBEDDED_AVATAR}"
     "${NEOPANEL_EMBEDDED_FONT}"
 
-    "${EUI_ANDROID_PORT_ROOT}/core/render/render_backend.cpp"
-    "${EUI_ANDROID_PORT_ROOT}/core/render/vulkan/vulkan_backend.cpp"
+    "${NEOPANEL_ANDROID_ELF_ROOT}/core/render/render_backend.cpp"
+    "${NEOPANEL_ANDROID_ELF_ROOT}/core/render/vulkan/vulkan_backend.cpp"
 
     "${EUI_ROOT}/core/render/primitive.cpp"
     "${EUI_ROOT}/core/render/image.cpp"
@@ -70,7 +65,7 @@ add_executable(neopanel_android
 
 target_include_directories(neopanel_android PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${EUI_ANDROID_PORT_ROOT}"
+    "${NEOPANEL_ANDROID_ELF_ROOT}"
     "${EUI_ROOT}"
     "${EUI_ROOT}/include"
 )

@@ -1,6 +1,6 @@
 # 第三方代码
 
-本目录只放与移植直接相关的外部代码。
+本目录只保留上游依赖。
 
 ## EUI-NEO
 
@@ -8,20 +8,16 @@
 third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
 ```
 
-这是上游渲染框架，以 Git submodule 形式引用。
+这是 NeoPanel Android ELF 的移植来源。仓库通过 Git submodule 引用它，不在本目录放本项目自己的移植说明或适配代码。
 
 初始化：
 
-```powershell
+```sh
 git submodule update --init --recursive
 ```
 
-## Android ELF Port Kit
+本项目自己的 Android ELF 适配层位于：
 
 ```text
-third_party/eui-neo-android-elf-port-kit
+src/eui_android_elf
 ```
-
-这是本仓库整理出的 Android ELF 移植代码包，包含 Surface、Vulkan、input、示例和移植说明。它不是独立上游项目，也不是 EUI-NEO 的完整替代品。
-
-发布或继续改造时，保留上游许可证和必要声明。
