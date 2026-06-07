@@ -1,83 +1,70 @@
 # NeoPanel Android ELF
 
-NeoPanel Android ELF is a standalone Android root executable that renders an EUI-style panel through Vulkan without an APK, Activity, or Android View hierarchy.
+NeoPanel Android ELF 是一个可以从 Android root shell 直接启动的原生可执行文件。它不是 APK，也不依赖 Activity、Android View 或 Java/Kotlin 入口；程序自己创建 Android Surface，并把 `ANativeWindow` 交给 Vulkan 渲染。
 
-The project is an Android ELF port and composition layer built around EUI-NE rendering primitives and a small Android native backend. The upstream EUI project must be credited and obtained from:
+界面层基于 EUI-NEO 的渲染 primitive 和 Vulkan 后端能力实现。上游项目以 Git submodule 形式保留在仓库中：
 
-https://github.com/sudoevolve/EUI-NE
+```text
+third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
+```
 
-## What This Builds
+## 当前产物
 
-The build output is a single arm64 Android ELF:
+构建输出是一个 arm64 ELF：
 
 ```text
 build/android/neopanel_android
 ```
 
-It is intended to run from a root shell on Android:
+部署后在 root shell 中运行：
 
 ```sh
 chmod 755 /data/local/tmp/neopanel/neopanel_android
 /data/local/tmp/neopanel/neopanel_android
 ```
 
-## Repository Layout
+## 目录结构
 
 ```text
-app/
-  main.cpp                         NeoPanel UI, text, embedded assets, runtime loop
-  android_window_backend_panel.cpp Android Surface/input window backend for fixed panel
-  embedded_assets.h                Generated embedded asset symbol declarations
+src/
+  main.cpp                         面板 UI、字体、资源、渲染循环
+  android_window_backend_panel.cpp 固定面板 Surface 与触摸输入后端
+  embedded_assets.h                编译期嵌入资源声明
 cmake/
-  embed_binary.cmake               Converts PNG/TTF files to C++ byte arrays
-  vulkan_portability_compat.h      Vulkan portability compatibility shim
+  embed_binary.cmake               将 PNG/TTF 转成 C++ 字节数组
+  vulkan_portability_compat.h      Vulkan 兼容宏
 docs/
-  BUILD_AND_RUN.md                 Build, deploy, verify, troubleshoot
-  PORTING.md                       Android ELF migration notes
-  GITHUB_RELEASE_CHECKLIST.md      Pre-upload checklist
+  BUILD_AND_RUN.md                 构建、部署、验证
+  PORTING.md                       Android ELF 移植说明
 picture/
-  avatar.png                       Embedded avatar source asset
-  layout_reference.jpg             Layout reference
-  ui_region_reference.jpg          Fixed region reference
+  avatar.png                       编译期嵌入的头像资源
 third_party/
-  eui-neo-android-elf-port-kit/    Android Surface/Vulkan/input port support
+  EUI-NEO/                         上游 EUI-NEO 子模块
+  eui-neo-android-elf-port-kit/    Android Surface/Vulkan/input 移植代码
 ```
 
-The upstream EUI source is tracked as a Git submodule at `third_party/EUI-NE`, so GitHub renders it as a linked upstream directory. The user-requested attribution URL is `https://github.com/sudoevolve/EUI-NE`; the currently cloneable upstream repository used by the submodule is `https://github.com/sudoevolve/EUI-NEO`.
+## 构建
 
-## Dependencies
-
-- Windows host with PowerShell.
-- CMake and Ninja.
-- Android NDK with arm64 support.
-- Upstream EUI source submodule from `https://github.com/sudoevolve/EUI-NEO`.
-- Rooted Android device with Vulkan support.
-
-Known working local toolchain:
-
-```text
-Android NDK r23c
-arm64-v8a
-ANDROID_PLATFORM=android-26
-ANDROID_STL=c++_static
-```
-
-## Build
-
-Option 1: clone this repository with submodules:
+首次克隆仓库时建议拉取子模块：
 
 ```powershell
-git clone --recurse-submodules <this-repository-url>
-powershell -ExecutionPolicy Bypass -File .\build_android.ps1 -NdkRoot 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c'
+git clone --recurse-submodules https://github.com/Sakura-TWT/NeoPanel-Android-ELF
 ```
 
-If the repository was cloned without submodules:
+如果已经克隆过仓库：
 
 ```powershell
 git submodule update --init --recursive
 ```
 
-Option 2: use an existing local upstream checkout:
+在 Windows 上构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
+  -NdkRoot 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c'
+```
+
+也可以使用已有的 EUI-NEO 本地源码：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
@@ -85,33 +72,21 @@ powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
   -EuiRoot 'D:\AndroidEUI\EUI-NEO-0.4.0'
 ```
 
-See [docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md) for deployment and verification commands.
+更多命令见 [docs/BUILD_AND_RUN.md](docs/BUILD_AND_RUN.md)。
 
-## Porting Summary
+## 移植核心
 
-The Android port replaces desktop windowing with:
+这个工程把桌面 UI 框架常见的窗口入口替换成 Android root ELF 路径：
 
-- `SurfaceComposerClient` surface creation.
-- `ANativeWindow` passed to Vulkan through `VK_KHR_android_surface`.
-- `/dev/input/event*` touch input discovery.
-- Touch drag converted into EUI scroll input.
-- Static STL linking so no `libc++_shared.so` needs to be deployed.
-- PNG and fallback font embedded into the ELF at build time.
+- 使用 SurfaceComposer 创建 Surface。
+- 通过 `VK_KHR_android_surface` 把 Vulkan 渲染到 `ANativeWindow`。
+- 从 `/dev/input/event*` 读取触摸输入。
+- 将手指拖动转换成 EUI 滚动输入。
+- 使用 `ANDROID_STL=c++_static`，运行时不需要额外部署 `libc++_shared.so`。
+- 将头像和字体在编译期嵌入 ELF，运行时不依赖旁置资源目录。
 
-The UI is drawn with EUI-NE primitive/render backend APIs rather than the full desktop app facade. See [docs/PORTING.md](docs/PORTING.md).
+移植细节见 [docs/PORTING.md](docs/PORTING.md)。
 
-## Attribution
+## 许可证
 
-This project depends on and derives rendering behavior from EUI-NE:
-
-https://github.com/sudoevolve/EUI-NE
-
-The active Git submodule points to the accessible upstream repository:
-
-https://github.com/sudoevolve/EUI-NEO
-
-The bundled Android ELF Port Kit files document the Android native backend approach used here. Preserve upstream notices and licenses when redistributing.
-
-## License
-
-See [LICENSE](LICENSE) and [NOTICE](NOTICE). Upstream EUI-NE is Apache-2.0 in the local source used for this port; always verify the license from the upstream repository before publishing a release.
+本仓库保留 Apache-2.0 许可证文本。EUI-NEO 上游源码以子模块方式引用，发布和二次分发时应保留上游许可证与声明。

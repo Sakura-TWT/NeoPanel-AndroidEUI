@@ -31,4 +31,4 @@ build.ninja
 
 # Optional non-submodule local upstream copies.
 third_party/EUI-NEO-0.4.0/
-third_party/EUI-NE-local/
+third_party/EUI-NEO-local/

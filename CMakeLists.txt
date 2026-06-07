@@ -6,12 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(NEOPANEL_DEFAULT_EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/EUI-NE")
+set(NEOPANEL_DEFAULT_EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/EUI-NEO")
 if(NOT EXISTS "${NEOPANEL_DEFAULT_EUI_ROOT}/include/eui_neo.h")
     set(NEOPANEL_DEFAULT_EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../EUI-NEO-0.4.0")
 endif()
 
-set(EUI_ROOT "${NEOPANEL_DEFAULT_EUI_ROOT}" CACHE PATH "EUI-NE source root")
+set(EUI_ROOT "${NEOPANEL_DEFAULT_EUI_ROOT}" CACHE PATH "EUI-NEO source root")
 set(EUI_ANDROID_PORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/eui-neo-android-elf-port-kit" CACHE PATH "EUI Android ELF port kit root")
 
 if(NOT EXISTS "${EUI_ROOT}/include/eui_neo.h")
@@ -47,8 +47,8 @@ add_custom_command(
 )
 
 add_executable(neopanel_android
-    app/main.cpp
-    app/android_window_backend_panel.cpp
+    src/main.cpp
+    src/android_window_backend_panel.cpp
     "${NEOPANEL_EMBEDDED_AVATAR}"
     "${NEOPANEL_EMBEDDED_FONT}"
 

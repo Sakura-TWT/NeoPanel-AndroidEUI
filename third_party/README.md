@@ -1,41 +1,27 @@
-# Third Party Code
+# 第三方代码
 
-This repository includes the small Android ELF Port Kit used by NeoPanel:
+本目录保留两个外部来源。
 
-```text
-third_party/eui-neo-android-elf-port-kit
-```
-
-It contains the Android native Surface, Vulkan, input, and example files needed for the root ELF port.
-
-The full upstream EUI project is linked as a Git submodule at:
+## EUI-NEO
 
 ```text
-third_party/EUI-NE
+third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
 ```
 
-The user-requested attribution URL is:
+这是主渲染框架来源，以 Git submodule 形式保留，GitHub 页面会显示为可点击的上游链接目录。
 
-```text
-https://github.com/sudoevolve/EUI-NE
-```
-
-The currently cloneable submodule remote is:
-
-```text
-https://github.com/sudoevolve/EUI-NEO
-```
-
-Initialize it with:
+初始化子模块：
 
 ```powershell
 git submodule update --init --recursive
 ```
 
-You can also pass a local path explicitly:
+## Android ELF Port Kit
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_android.ps1 -EuiRoot 'D:\path\to\EUI-NE'
+```text
+third_party/eui-neo-android-elf-port-kit
 ```
 
-Before publishing a release that vendors upstream source, verify the upstream license and preserve all required notices.
+这里保存 Android root ELF 移植相关的 Surface、Vulkan、input 和示例文件。它是本工程能脱离 APK 运行的关键移植层。
+
+发布时应保留上游许可证和必要声明。

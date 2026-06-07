@@ -1,4 +1,4 @@
-#include "app/embedded_assets.h"
+#include "src/embedded_assets.h"
 
 #include "core/input/input_state.h"
 #include "core/render/primitive.h"

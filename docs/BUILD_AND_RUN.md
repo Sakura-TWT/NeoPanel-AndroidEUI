@@ -1,38 +1,32 @@
-# Build And Run
+# 构建与运行
 
-This guide builds the `neopanel_android` arm64 Android ELF and runs it from a root shell.
+本文记录从源码构建 `neopanel_android`、验证 ELF、推送到设备运行的最短路径。
 
-## 1. Prepare Upstream EUI-NE
+## 准备子模块
 
-Use the upstream EUI submodule. The user-requested attribution URL is:
-
-```text
-https://github.com/sudoevolve/EUI-NE
-```
-
-The cloneable upstream repository currently used by the submodule is:
+上游 EUI-NEO 以子模块方式放在 `third_party/EUI-NEO`：
 
 ```text
 https://github.com/sudoevolve/EUI-NEO
 ```
 
-When cloning this repository:
+首次克隆仓库：
 
 ```powershell
-git clone --recurse-submodules <this-repository-url>
+git clone --recurse-submodules https://github.com/Sakura-TWT/NeoPanel-Android-ELF
 ```
 
-If already cloned:
+已有仓库时补齐子模块：
 
 ```powershell
 git submodule update --init --recursive
 ```
 
-If you already have a local copy, pass it with `-EuiRoot`.
+也可以不用子模块，直接通过 `-EuiRoot` 指向已有的 EUI-NEO 源码目录。
 
-## 2. Build On Windows
+## Windows 构建
 
-Known working command:
+已验证命令：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
@@ -40,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File .\build_android.ps1 `
   -EuiRoot 'D:\AndroidEUI\EUI-NEO-0.4.0'
 ```
 
-The script configures:
+脚本默认配置：
 
 ```text
 ANDROID_ABI=arm64-v8a
@@ -49,20 +43,20 @@ ANDROID_STL=c++_static
 CMAKE_BUILD_TYPE=Release
 ```
 
-Expected output:
+输出：
 
 ```text
 build/android/neopanel_android
 ```
 
-## 3. Verify ELF
+## 验证 ELF
 
 ```powershell
 & 'D:\VSTool\Shared\Android\AndroidNDK\android-ndk-r23c\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-readelf.exe' -h build\android\neopanel_android |
   Select-String -Pattern 'Class:|Machine:|Type:'
 ```
 
-Expected:
+期望结果：
 
 ```text
 Class:   ELF64
@@ -70,17 +64,17 @@ Type:    DYN
 Machine: AArch64
 ```
 
-Check that no runtime asset folder or shared C++ STL is required:
+确认没有额外部署文件：
 
 ```powershell
 Get-ChildItem -Force build\android | Where-Object { $_.Name -like '*c++*' -or $_.Name -eq 'picture' }
 ```
 
-Expected output: no rows.
+期望无输出。头像和字体已经嵌入 ELF，`ANDROID_STL=c++_static` 也避免了 `libc++_shared.so`。
 
-## 4. Deploy To Android
+## 部署运行
 
-Example with `adb`:
+示例：
 
 ```sh
 adb push build/android/neopanel_android /data/local/tmp/neopanel/neopanel_android
@@ -89,33 +83,29 @@ adb shell su -c "chmod 755 /data/local/tmp/neopanel/neopanel_android /data/local
 adb shell su -c "/data/local/tmp/neopanel/deploy_example.sh"
 ```
 
-The executable reads touch input from `/dev/input/event*`, so it normally needs root.
+程序会读取 `/dev/input/event*`，通常必须 root 才能正常响应触摸。
 
-## 5. Runtime Notes
+## 常见问题
 
-- The Android Surface is the carrier; rounded shell, glow, masks, and panel content are drawn by EUI primitives.
-- The fixed target screenshot layout is 1080 x 2400 with a 960 x 640 panel at x=64, y=872.
-- If a device has a different resolution, the Android backend scales the fixed rect proportionally.
-- The runtime tries Android system CJK fonts first and falls back to the embedded UI font.
-- The avatar PNG and fallback font are embedded into the ELF by CMake.
+构建提示找不到 EUI-NEO：
 
-## Troubleshooting
+```powershell
+git submodule update --init --recursive
+```
 
-`EUI-NE source was not found`:
+或者显式传入：
 
-- Run `git submodule update --init --recursive`, or pass `-EuiRoot`.
+```powershell
+-EuiRoot 'D:\path\to\EUI-NEO'
+```
 
-`Android NDK was not found`:
+没有触摸响应：
 
-- Set `ANDROID_NDK_HOME`, or pass `-NdkRoot`.
+- 确认用 root 启动。
+- 确认 `/dev/input/event*` 可读。
 
-No touch response:
+Vulkan 或 Surface 创建失败：
 
-- Confirm the executable is running as root.
-- Confirm `/dev/input/event*` exists and is readable.
-
-Blank or failed Vulkan surface:
-
-- Confirm the device supports Vulkan.
-- Confirm `libvulkan.so` exists on device.
-- Check the log file written by `deploy_example.sh`.
+- 确认设备支持 Vulkan。
+- 确认系统存在 `libvulkan.so`。
+- 查看 `deploy_example.sh` 生成的日志。

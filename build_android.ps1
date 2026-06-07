@@ -45,7 +45,7 @@ if ([string]::IsNullOrWhiteSpace($NdkRoot) -or !(Test-Path -LiteralPath "$NdkRoo
 }
 
 if ([string]::IsNullOrWhiteSpace($EuiRoot)) {
-    $repoLocalEui = Join-Path $ProjectRoot "third_party\EUI-NE"
+    $repoLocalEui = Join-Path $ProjectRoot "third_party\EUI-NEO"
     $siblingEui = Join-Path (Split-Path -Parent $ProjectRoot) "EUI-NEO-0.4.0"
     if (Test-Path -LiteralPath "$repoLocalEui\include\eui_neo.h") {
         $EuiRoot = $repoLocalEui
@@ -59,7 +59,7 @@ if ([string]::IsNullOrWhiteSpace($EuiAndroidPortRoot)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($EuiRoot) -or !(Test-Path -LiteralPath "$EuiRoot\include\eui_neo.h")) {
-    throw "EUI-NE source was not found. Clone https://github.com/sudoevolve/EUI-NE to third_party\EUI-NE or pass -EuiRoot."
+    throw "EUI-NEO source was not found. Run git submodule update --init --recursive or pass -EuiRoot."
 }
 
 if (!(Test-Path -LiteralPath "$EuiAndroidPortRoot\core\platform\android\native_surface\ANativeWindowCreator.h")) {

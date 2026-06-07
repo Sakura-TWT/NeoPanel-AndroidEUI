@@ -1,22 +1,14 @@
-# Android ELF Porting Notes
+# Android ELF 移植说明
 
-This document explains how NeoPanel was moved from a desktop-style EUI rendering stack into a standalone Android ELF executable.
-
-The original project that must be credited is EUI-NE:
+NeoPanel 的目标是把 EUI-NEO 的渲染能力放进一个 Android root ELF，而不是做成 APK。上游项目通过子模块引用：
 
 ```text
-https://github.com/sudoevolve/EUI-NE
+third_party/EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
 ```
 
-The active Git submodule uses the currently cloneable upstream repository:
+## 运行模型
 
-```text
-https://github.com/sudoevolve/EUI-NEO
-```
-
-## Goal
-
-The target is not an APK. It is a root-launched Android ELF:
+最终运行链路如下：
 
 ```text
 Android root shell
@@ -27,19 +19,11 @@ Android root shell
   -> EUI render primitives
 ```
 
-There is no Activity, Java/Kotlin entry point, Android View tree, XML layout, or APK packaging.
+没有 Activity、AndroidManifest、Java/Kotlin 入口和 Android View 树。程序自己负责窗口、渲染和输入。
 
-## Why A Low-Level Integration
+## 为什么直接用底层 primitive
 
-The original EUI desktop examples assume a normal app facade and desktop windowing. The Android root ELF path has different constraints:
-
-- The executable must own the native window lifecycle.
-- Vulkan must render into an Android `ANativeWindow`.
-- Input must be read from Linux input devices.
-- Runtime assets should not require an external app directory.
-- The final artifact should stay deployable as one executable.
-
-For that reason, NeoPanel uses EUI low-level primitives and render backend calls directly:
+Android root ELF 环境和桌面示例不同：没有 GLFW/SDL2 窗口，也没有系统事件分发。为了降低移植风险，NeoPanel 没有套完整桌面 app facade，而是直接使用 EUI-NEO 的底层绘制与渲染后端：
 
 ```text
 core::RoundedRectPrimitive
@@ -49,9 +33,9 @@ core::render::VulkanRenderBackend
 core::input queue/consume APIs
 ```
 
-## Window And Surface
+这样可以明确控制 Surface、Vulkan、输入和资源生命周期。
 
-The Android backend creates a fixed panel surface using SurfaceComposer APIs from the port kit. The intended design coordinate system is:
+## Surface 与坐标
 
 ```text
 Design screen:      1080 x 2400
@@ -59,24 +43,11 @@ Panel design rect:  x=64, y=872, width=960, height=640
 Internal UI size:   960 x 640
 ```
 
-On devices with different physical sizes, the backend scales the panel rect proportionally.
-
-The Android Surface does not provide the visual frame. It is only the rendering target. The shell, rounded corners, masks, borders, and glass effect are drawn by EUI primitives.
+Android 后端用 SurfaceComposer 创建一个固定面板区域。不同分辨率设备会按比例缩放这个矩形。Surface 只负责承载像素，圆角外壳、边框、阴影、遮罩和内容全部由 EUI primitive 绘制。
 
 ## Vulkan
 
-The port uses `VK_KHR_android_surface` and links:
-
-```text
-android
-log
-vulkan
-dl
-m
-c
-```
-
-The CMake build defines:
+构建时启用：
 
 ```text
 VK_USE_PLATFORM_ANDROID_KHR=1
@@ -84,64 +55,56 @@ EUI_RENDER_BACKEND_VULKAN=1
 EUI_WINDOW_BACKEND_ANDROID=1
 ```
 
-Static STL is selected with:
+链接 Android 系统库：
 
 ```text
-ANDROID_STL=c++_static
+android
+log
+vulkan
+dl
 ```
 
-This avoids deploying `libc++_shared.so` next to the ELF.
+构建脚本使用 `ANDROID_STL=c++_static`，所以不需要额外部署 `libc++_shared.so`。
 
 ## Input
 
-Because the executable is not an APK, it does not receive Android View touch callbacks. The backend discovers touch devices under:
+程序不是 APK，不会收到 Android View 的触摸回调。后端扫描：
 
 ```text
 /dev/input/event*
 ```
 
-It reads ABS coordinates, maps them into the fixed panel coordinate system, tracks press/release state, and converts vertical drag movement into scroll input through the EUI input queue.
+读取 ABS 坐标后映射到 960 x 640 面板坐标。点击、释放和拖动状态会写入 EUI 输入队列，纵向拖动转换为滚动输入。这个路径通常需要 root 权限。
 
-This is why root access is normally required.
+## 资源嵌入
 
-## Assets
-
-The executable embeds its resources during CMake configure/build:
+构建阶段将资源转成 C++ 字节数组：
 
 ```text
-picture/avatar.png
-EUI-NE asset font fallback
+picture/avatar.png -> embedded_avatar.cpp
+EUI-NEO fallback font -> embedded_ui_font.cpp
 ```
 
-`cmake/embed_binary.cmake` converts binary files into generated C++ byte arrays:
-
-```text
-embedded_avatar.cpp
-embedded_ui_font.cpp
-```
-
-At runtime:
+运行时：
 
 - `stb_image` decodes the embedded PNG from memory.
-- The render backend uploads it as a texture.
-- `stb_truetype` rasterizes text glyphs into small textures.
-- Android system CJK fonts are preferred before the embedded fallback font.
+- 渲染后端把头像上传为纹理。
+- `stb_truetype` 将文字 glyph 栅格化为小纹理。
+- 优先使用 Android 系统 CJK 字体，失败后使用嵌入字体。
 
-This keeps the runtime deploy shape to one executable.
+这样部署时只需要一个 ELF。
 
-## UI Rendering
+## UI 组织
 
-`app/main.cpp` draws the full panel using primitive operations:
+主界面在 `src/main.cpp` 中绘制：
 
-- outer shell and side rail
-- avatar cover crop
-- navigation list
-- content frame
-- scroll masks and scissor clipping
-- typography and glyph textures
-- metrics, graphs, controls, material studies, and motion preview
+- 外壳和左侧导航。
+- 头像 cover crop。
+- 右侧内容面板。
+- scroll scissor 和上下遮罩。
+- DEMO / FRAME / EFFECT / SYS 四个内容页。
 
-The content area is fixed:
+内容区固定：
 
 ```text
 contentX=258
@@ -152,43 +115,10 @@ scrollTop=contentY + 126
 scrollBottom=contentY + contentH - 42
 ```
 
-Scrollable content is rendered under backend scissor clipping. The fixed header is redrawn after scroll masks so scrolled content cannot visually intrude into the header.
+可滚动内容在 scissor 内绘制，然后绘制遮罩，最后重绘固定 header，避免滚动内容压到标题区域。
 
-## Current Pages
+## 当前边界
 
-```text
-DEMO    material/control study
-FRAME   isolated performance telemetry and FPS selector
-EFFECT  perspective card motion stage
-SYS     Android/Vulkan/static STL/deployment notes
-```
-
-Performance telemetry is intentionally isolated to `FRAME`; other pages are designed to avoid becoming repeated dashboard cards.
-
-## Build Integration
-
-The project CMake file combines:
-
-- NeoPanel app files.
-- Android ELF Port Kit render/window/input support.
-- Required EUI-NE render primitives and Vulkan files.
-- Generated embedded binary files.
-
-The upstream EUI source is supplied by submodule:
-
-```text
-third_party/EUI-NE
-```
-
-or by overriding with a local checkout:
-
-```powershell
--EuiRoot 'path\to\EUI-NE'
-```
-
-## Limitations
-
-- The executable assumes root-level access for `/dev/input`.
-- The UI is a custom fixed-size panel, not a general Android layout system.
-- The 3D card stage is perspective-projected 2D primitive rendering, not a separate Vulkan 3D mesh pipeline.
-- The upstream EUI-NE source remains an external dependency unless the repository owner intentionally vendors it.
+- 触摸输入依赖 root 读取 `/dev/input`。
+- 面板是固定设计尺寸，不是通用 Android 自适应布局系统。
+- EFFECT 页的 3D 视觉是 primitive 的透视投影，不是独立 3D mesh 管线。
