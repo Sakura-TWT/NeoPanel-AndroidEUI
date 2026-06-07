@@ -1183,14 +1183,15 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
         return;
     }
 
-    const float phase = std::floor(timeSeconds * 20.0f) / 20.0f;
-    if (texture.handle != nullptr &&
-        std::fabs(texture.shadedYaw - yaw) < 0.0025f &&
-        std::fabs(texture.shadedPitch - pitch) < 0.0025f &&
-        std::fabs(texture.shadedPhase - phase) < 0.001f &&
-        texture.shadedPressed == pressed) {
+    if (texture.handle != nullptr) {
         return;
     }
+
+    const float phase = 0.0f;
+    yaw = kStarRestYaw;
+    pitch = kStarRestPitch;
+    pressed = false;
+    (void)timeSeconds;
 
     const core::Vec3 light = normalize3({-0.34f + yaw * 0.34f, -0.58f - pitch * 0.20f, 0.96f});
     const core::Vec3 view = {0.0f, 0.0f, 1.0f};
@@ -1261,10 +1262,8 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
     if (texture.handle == nullptr) {
         texture.handle = backend->createTexture(texture.pixels.data(), texture.width, texture.height);
         if (texture.handle != nullptr) {
-            texture.drawHoldFrames = 1;
+            texture.drawHoldFrames = 2;
         }
-    } else {
-        backend->updateTexture(texture.handle, texture.pixels.data(), texture.width, texture.height);
     }
     texture.shadedYaw = yaw;
     texture.shadedPitch = pitch;
@@ -2247,25 +2246,6 @@ void drawStarSparkle(float x, float y, float size, const core::Color& color, flo
     drawAccentDot(x, y, size * 0.11f, rgba(1.0f, 1.0f, 1.0f, color.a), opacity);
 }
 
-void drawStarGlowArc(float x, float y, float width, float height, float yaw, float pitch, float opacity) {
-    const float centerX = x + width * 0.5f + yaw * 18.0f;
-    const float centerY = y + height * 0.56f + pitch * 10.0f;
-    for (int i = 0; i < 3; ++i) {
-        const float t = static_cast<float>(i);
-        drawRect(centerX - width * (0.26f + t * 0.042f),
-                 centerY - height * (0.080f + t * 0.018f),
-                 width * (0.52f + t * 0.084f),
-                 height * (0.16f + t * 0.036f),
-                 height * 0.09f,
-                 rgba(0.84f, 0.72f, 1.0f, (0.070f - t * 0.014f) * opacity),
-                 {},
-                 {},
-                 {},
-                 opacity,
-                 16.0f + t * 8.0f);
-    }
-}
-
 void renderPremiumStarStage(PanelState& state, float contentX, float contentW, float stageY, float opacity) {
     const core::Color accent = pageAccent(2);
     const core::Rect stage = premiumStarStageRect(contentX, contentW, stageY);
@@ -2287,39 +2267,15 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     drawRect(stage.x + 30.0f, stage.y + 30.0f, stage.width - 60.0f, stage.height - 62.0f, 28.0f,
              rgba(1.0f, 1.0f, 1.0f, 0.032f * opacity),
              {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.044f * opacity)});
-    drawStarGlowArc(visual.x, visual.y, visual.width, visual.height, state.starYaw, state.starPitch, opacity);
-    drawRect(stage.x + 50.0f,
-             stage.y + stage.height - 55.0f,
-             stage.width - 100.0f,
-             5.0f,
-             2.5f,
-             rgba(0.90f, 0.76f, 1.0f, 0.055f * opacity),
-             {},
-             {},
-             {},
-             opacity,
-             12.0f);
-    drawRect(visual.x + 54.0f + state.starYaw * 9.0f,
-             visual.y + visual.height - 25.0f - state.starPitch * 7.0f,
-             visual.width - 108.0f,
-             12.0f,
-             6.0f,
-             rgba(0.88f, 0.72f, 1.0f, 0.075f * opacity),
-             {},
-             {},
-             {},
-             opacity,
-             16.0f);
-
-    for (int i = 0; i < 18; ++i) {
+    for (int i = 0; i < 10; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
         const float px = stage.x + 38.0f + hash01(seed) * (stage.width - 76.0f);
         const float py = stage.y + 34.0f + hash01(seed + 9.0f) * (stage.height - 90.0f);
         const float shimmer = smoothstep(0.08f, 1.0f, 0.5f + 0.5f * std::sin(state.launchTime * (1.3f + hash01(seed + 4.0f) * 1.8f) + seed));
-        const float size = 2.4f + hash01(seed + 2.0f) * 4.6f;
-        const float op = (0.040f + shimmer * 0.22f) * opacity;
-        drawStarSparkle(px + state.starYaw * (6.0f + hash01(seed + 5.0f) * 12.0f),
-                         py - state.starPitch * (4.0f + hash01(seed + 6.0f) * 10.0f),
+        const float size = 2.0f + hash01(seed + 2.0f) * 2.8f;
+        const float op = (0.020f + shimmer * 0.090f) * opacity;
+        drawStarSparkle(px + state.starYaw * (2.0f + hash01(seed + 5.0f) * 5.0f),
+                         py - state.starPitch * (2.0f + hash01(seed + 6.0f) * 4.0f),
                          size,
                          rgba(0.98f, 0.96f, 1.0f, 0.82f),
                          op);
@@ -2332,28 +2288,13 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     transform.origin = {0.5f, 0.5f};
     transform.rotate = state.starYaw * 0.06f;
     transform.rotateX = state.starPitch * 0.72f;
-    transform.rotateY = state.starYaw * 0.86f;
+    transform.rotateY = -state.starYaw * 0.86f;
     transform.translate = {state.starYaw * 19.0f, state.starPitch * 13.0f - pressed * 4.0f};
     transform.translateZ = 52.0f + pressed * 20.0f;
     transform.perspective = 560.0f;
     transform.scale = {1.015f + pressed * 0.030f, 1.015f + pressed * 0.030f};
 
     if (starTextureReady) {
-        core::Transform sideTransform = transform;
-        sideTransform.translate.x += 2.5f - state.starYaw * 4.0f;
-        sideTransform.translate.y += 3.5f - state.starPitch * 2.5f;
-        sideTransform.translateZ -= 18.0f;
-        sideTransform.scale = {0.998f + pressed * 0.010f, 0.998f + pressed * 0.010f};
-        const core::TransformMatrix sideMatrix = matrixForTransform(visual, sideTransform);
-        drawTextureQuadMatrix(state.starTexture.handle,
-                              visual.x,
-                              visual.y,
-                              visual.width,
-                              visual.height,
-                              sideMatrix,
-                              rgba(0.92f, 0.82f, 1.0f, 0.105f * opacity),
-                              0.0f);
-
         const core::TransformMatrix matrix = matrixForTransform(visual, transform);
         drawTextureQuadMatrix(state.starTexture.handle,
                               visual.x,
