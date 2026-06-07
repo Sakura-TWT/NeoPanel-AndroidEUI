@@ -36,7 +36,7 @@ constexpr int kGraphSamples = 56;
 constexpr float kFpsMin = 30.0f;
 constexpr float kFpsMax = 120.0f;
 constexpr float kPi = 3.14159265358979323846f;
-constexpr int kStarTextureSize = 288;
+constexpr int kStarTextureSize = 320;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
 
@@ -1132,18 +1132,18 @@ void buildPremiumStarBase(StarRenderTexture& texture) {
             const float angle = std::atan2(v, u);
             const float starRadius = premiumStarRadius(angle);
             const float signedDistance = radius - starRadius;
-            const float alpha = 1.0f - smoothstep(-0.018f, 0.020f, signedDistance);
-            const float outsideGlow = std::exp(-std::max(0.0f, signedDistance) * std::max(0.0f, signedDistance) * 58.0f);
+            const float alpha = 1.0f - smoothstep(-0.024f, 0.022f, signedDistance);
+            const float outsideGlow = std::exp(-std::max(0.0f, signedDistance) * std::max(0.0f, signedDistance) * 54.0f);
             const float innerDistance = std::max(0.0f, -signedDistance);
-            const float edge = smoothstep(0.0f, 0.155f, innerDistance);
+            const float edge = smoothstep(0.0f, 0.175f, innerDistance);
             const float ridge = std::pow(0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f)), 2.5f);
-            const float dome = std::pow(std::max(0.0f, 1.0f - radius * 0.68f), 1.6f);
+            const float dome = std::pow(std::max(0.0f, 1.0f - radius * 0.66f), 1.55f);
             const float tipLift = ridge * smoothstep(0.36f, 0.82f, radius / std::max(0.001f, starRadius));
             const float valleyFold = (1.0f - ridge) * smoothstep(0.40f, 0.95f, radius / std::max(0.001f, starRadius));
             const float centerFold = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f))), 8.0f) *
                                      smoothstep(0.08f, 0.68f, radius / std::max(0.001f, starRadius));
-            const float height = alpha * std::clamp(0.10f + edge * 0.60f + dome * 0.30f + tipLift * 0.20f +
-                                                        centerFold * 0.12f - valleyFold * 0.10f,
+            const float height = alpha * std::clamp(0.13f + edge * 0.58f + dome * 0.34f + tipLift * 0.24f +
+                                                        centerFold * 0.16f - valleyFold * 0.08f,
                                                     0.0f,
                                                     1.0f);
             const std::size_t index = static_cast<std::size_t>(y * texture.width + x);
@@ -1164,7 +1164,7 @@ void buildPremiumStarBase(StarRenderTexture& texture) {
                              texture.heightMap[static_cast<std::size_t>(y * texture.width + left)];
             const float dy = texture.heightMap[static_cast<std::size_t>(down * texture.width + x)] -
                              texture.heightMap[static_cast<std::size_t>(up * texture.width + x)];
-            const core::Vec3 normal = normalize3({-dx * 5.2f, -dy * 5.2f, 1.0f});
+            const core::Vec3 normal = normalize3({-dx * 6.4f, -dy * 6.4f, 1.0f});
             const std::size_t index = static_cast<std::size_t>(y * texture.width + x);
             texture.normalX[index] = normal.x;
             texture.normalY[index] = normal.y;
@@ -1187,7 +1187,7 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
         return;
     }
 
-    const float phase = 0.0f;
+    const float phase = 0.42f;
     yaw = kStarRestYaw;
     pitch = kStarRestPitch;
     pressed = false;
@@ -1220,33 +1220,37 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
                                                               pitch * 0.58f,
                                                               yaw * 0.72f));
             const float diffuse = std::max(0.0f, dot3(normal, light));
-            const float broad = std::pow(std::max(0.0f, dot3(normal, halfVector)), 6.0f);
-            const float spec = std::pow(std::max(0.0f, dot3(normal, halfVector)), 38.0f);
+            const float broad = std::pow(std::max(0.0f, dot3(normal, halfVector)), 5.5f);
+            const float spec = std::pow(std::max(0.0f, dot3(normal, halfVector)), 34.0f);
             const float edgeTint = 1.0f - texture.edge[index];
-            const float diagonal = 1.0f - smoothstep(0.010f, 0.090f, std::fabs(u * 0.72f + v * 0.48f + 0.11f - yaw * 0.06f));
+            const float radius = std::sqrt(u * u + v * v);
+            const float angle = std::atan2(v, u);
+            const float ridge = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f))), 3.0f);
+            const float valley = std::pow(std::max(0.0f, 1.0f - ridge), 1.35f) * smoothstep(0.18f, 0.86f, radius);
+            const float diagonal = 1.0f - smoothstep(0.012f, 0.100f, std::fabs(u * 0.72f + v * 0.48f + 0.11f - yaw * 0.06f));
             const float topFlash = std::exp(-((u + 0.24f - yaw * 0.10f) * (u + 0.24f - yaw * 0.10f) * 12.0f +
                                              (v + 0.36f + pitch * 0.08f) * (v + 0.36f + pitch * 0.08f) * 18.0f));
-            const float pearlescent = 0.5f + 0.5f * std::sin((u - v) * 5.0f + phase * 0.72f);
-            const float fold = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (std::atan2(v, u) + kPi * 0.5f))), 4.0f);
-            const float shade = 0.70f + diffuse * 0.32f + broad * 0.18f + spec * 0.52f + diagonal * 0.055f + topFlash * 0.24f + fold * 0.045f;
-            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.8f) * 0.18f + edgeTint * 0.12f;
-            const float warmth = 0.36f + 0.22f * pearlescent + yaw * 0.10f;
+            const float coolSheen = std::exp(-((u - 0.32f) * (u - 0.32f) * 16.0f + (v + 0.02f) * (v + 0.02f) * 20.0f));
+            const float warmSheen = std::exp(-((u + 0.40f) * (u + 0.40f) * 18.0f + (v - 0.04f) * (v - 0.04f) * 15.0f));
+            const float lowerViolet = smoothstep(-0.06f, 0.86f, v + pitch * 0.18f) * (0.065f + edgeTint * 0.045f);
+            const float pearlWave = 0.5f + 0.5f * std::sin((u * 5.8f - v * 4.6f) + phase + ridge * 1.25f);
+            const float rim = std::pow(std::max(0.0f, 1.0f - normal.z), 1.7f) * 0.16f + edgeTint * 0.13f;
+            const float shade = diffuse * 0.19f + broad * 0.18f + spec * 0.46f + topFlash * 0.30f + diagonal * 0.075f + ridge * 0.045f;
 
-            float r = 0.75f + shade * 0.24f + rim * 0.19f + topFlash * 0.16f;
-            float g = 0.78f + shade * 0.21f + rim * 0.13f;
-            float b = 0.99f + shade * 0.15f + rim * 0.10f;
-            r += warmth * 0.08f + pressGlow * 0.025f;
-            g += (1.0f - warmth) * 0.05f + pressGlow * 0.018f;
-            b += 0.05f + pressGlow * 0.020f;
+            float r = 0.66f + shade * 0.30f + rim * 0.13f + topFlash * 0.12f + warmSheen * 0.11f + pearlWave * 0.030f;
+            float g = 0.70f + shade * 0.25f + rim * 0.10f + coolSheen * 0.055f + topFlash * 0.09f + pearlWave * 0.026f;
+            float b = 0.91f + shade * 0.14f + rim * 0.12f + coolSheen * 0.13f + diagonal * 0.050f + pearlWave * 0.040f;
+            r += pressGlow * 0.025f;
+            g += pressGlow * 0.018f;
+            b += pressGlow * 0.020f;
 
-            const float shadow = smoothstep(-0.08f, 0.74f, v + pitch * 0.18f) * (0.105f + edgeTint * 0.070f);
-            r -= shadow * 0.12f;
-            g -= shadow * 0.10f;
-            b -= shadow * 0.060f;
+            r -= lowerViolet * 0.105f + valley * 0.035f;
+            g -= lowerViolet * 0.060f + valley * 0.030f;
+            b += lowerViolet * 0.055f - valley * 0.012f;
 
             if (alpha <= 0.001f) {
-                texture.pixels[pixel + 0] = byteFromFloat(0.72f + 0.10f * pearlescent);
-                texture.pixels[pixel + 1] = byteFromFloat(0.68f + 0.14f * pearlescent);
+                texture.pixels[pixel + 0] = byteFromFloat(0.72f + 0.10f * pearlWave);
+                texture.pixels[pixel + 1] = byteFromFloat(0.68f + 0.14f * pearlWave);
                 texture.pixels[pixel + 2] = byteFromFloat(1.0f);
                 texture.pixels[pixel + 3] = byteFromFloat(glow * (0.18f + pressGlow * 0.10f));
                 continue;
@@ -2246,6 +2250,21 @@ void drawStarSparkle(float x, float y, float size, const core::Color& color, flo
     drawAccentDot(x, y, size * 0.11f, rgba(1.0f, 1.0f, 1.0f, color.a), opacity);
 }
 
+void drawStarDustStreak(float x, float y, float height, float opacity, float phase) {
+    if (opacity <= 0.001f || height <= 1.0f) {
+        return;
+    }
+    const float shimmer = 0.64f + 0.36f * std::sin(phase);
+    drawLine(x,
+             y,
+             x,
+             y + height,
+             1.0f,
+             rgba(0.88f, 0.76f, 1.0f, (0.10f + shimmer * 0.16f) * opacity),
+             1.0f);
+    drawAccentDot(x, y + height * 0.22f, 1.2f, rgba(1.0f, 0.94f, 1.0f, 0.18f), opacity * shimmer);
+}
+
 void renderPremiumStarStage(PanelState& state, float contentX, float contentW, float stageY, float opacity) {
     const core::Color accent = pageAccent(2);
     const core::Rect stage = premiumStarStageRect(contentX, contentW, stageY);
@@ -2255,8 +2274,8 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
 
     core::Gradient stageGradient;
     stageGradient.enabled = true;
-    stageGradient.start = gNight ? rgba(0.32f, 0.36f, 1.0f, 0.22f * opacity) : rgba(0.48f, 0.58f, 1.0f, 0.15f * opacity);
-    stageGradient.end = gNight ? rgba(0.98f, 0.36f, 0.74f, 0.28f * opacity) : rgba(0.98f, 0.46f, 0.72f, 0.18f * opacity);
+    stageGradient.start = gNight ? rgba(0.20f, 0.28f, 0.88f, 0.26f * opacity) : rgba(0.48f, 0.58f, 1.0f, 0.16f * opacity);
+    stageGradient.end = gNight ? rgba(0.98f, 0.32f, 0.73f, 0.31f * opacity) : rgba(0.98f, 0.46f, 0.72f, 0.19f * opacity);
     stageGradient.direction = core::GradientDirection::Horizontal;
     drawRect(stage.x, stage.y, stage.width, stage.height, 30.0f,
              rgba(accent.r, accent.g, accent.b, (0.076f + pressed * 0.028f) * opacity),
@@ -2265,20 +2284,51 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
              stageGradient);
 
     drawRect(stage.x + 30.0f, stage.y + 30.0f, stage.width - 60.0f, stage.height - 62.0f, 28.0f,
-             rgba(1.0f, 1.0f, 1.0f, 0.032f * opacity),
+             rgba(1.0f, 1.0f, 1.0f, 0.026f * opacity),
              {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.044f * opacity)});
-    for (int i = 0; i < 10; ++i) {
+
+    drawRect(visual.x - 38.0f + state.starYaw * 10.0f,
+             visual.y + 26.0f + state.starPitch * 5.0f,
+             visual.width + 76.0f,
+             visual.height - 12.0f,
+             42.0f,
+             rgba(0.55f, 0.50f, 1.0f, (0.026f + pressed * 0.018f) * opacity),
+             {},
+             {},
+             {},
+             1.0f,
+             10.0f);
+    drawRect(visual.x + visual.width * 0.12f - state.starYaw * 8.0f,
+             visual.y + visual.height * 0.17f - state.starPitch * 8.0f,
+             visual.width * 0.74f,
+             visual.height * 0.46f,
+             38.0f,
+             rgba(1.0f, 0.82f, 0.98f, (0.018f + pulse * 0.010f) * opacity),
+             {},
+             {},
+             {},
+             1.0f,
+             8.0f);
+
+    for (int i = 0; i < 16; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
         const float px = stage.x + 38.0f + hash01(seed) * (stage.width - 76.0f);
         const float py = stage.y + 34.0f + hash01(seed + 9.0f) * (stage.height - 90.0f);
         const float shimmer = smoothstep(0.08f, 1.0f, 0.5f + 0.5f * std::sin(state.launchTime * (1.3f + hash01(seed + 4.0f) * 1.8f) + seed));
-        const float size = 2.0f + hash01(seed + 2.0f) * 2.8f;
-        const float op = (0.020f + shimmer * 0.090f) * opacity;
+        const float size = 1.6f + hash01(seed + 2.0f) * 4.8f;
+        const float op = (0.030f + shimmer * 0.145f) * opacity;
         drawStarSparkle(px + state.starYaw * (2.0f + hash01(seed + 5.0f) * 5.0f),
                          py - state.starPitch * (2.0f + hash01(seed + 6.0f) * 4.0f),
                          size,
-                         rgba(0.98f, 0.96f, 1.0f, 0.82f),
+                         rgba(0.98f, 0.94f + hash01(seed + 7.0f) * 0.05f, 1.0f, 0.86f),
                          op);
+    }
+    for (int i = 0; i < 12; ++i) {
+        const float seed = 100.0f + static_cast<float>(i) * 13.0f;
+        const float x = stage.x + 58.0f + hash01(seed) * (stage.width - 116.0f) + state.starYaw * (6.0f + hash01(seed + 1.0f) * 8.0f);
+        const float y = stage.y + 36.0f + hash01(seed + 2.0f) * (stage.height - 116.0f) - state.starPitch * 6.0f;
+        const float h = 10.0f + hash01(seed + 3.0f) * 34.0f;
+        drawStarDustStreak(x, y, h, (0.14f + hash01(seed + 4.0f) * 0.20f) * opacity, state.launchTime * (0.8f + hash01(seed + 5.0f)) + seed);
     }
 
     shadePremiumStar(state.starTexture, state.starPitch, state.starYaw, state.launchTime, state.pressedStar);
@@ -2288,7 +2338,7 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     transform.origin = {0.5f, 0.5f};
     transform.rotate = state.starYaw * 0.06f;
     transform.rotateX = state.starPitch * 0.72f;
-    transform.rotateY = -state.starYaw * 0.86f;
+    transform.rotateY = state.starYaw * 0.86f;
     transform.translate = {state.starYaw * 19.0f, state.starPitch * 13.0f - pressed * 4.0f};
     transform.translateZ = 52.0f + pressed * 20.0f;
     transform.perspective = 560.0f;
@@ -2309,6 +2359,11 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
         --state.starTexture.drawHoldFrames;
     }
 
+    drawStarSparkle(visual.x + visual.width * (0.58f + state.starYaw * 0.08f),
+                    visual.y + visual.height * (0.31f + state.starPitch * 0.06f),
+                    13.5f + pressed * 2.0f,
+                    rgba(1.0f, 0.95f, 1.0f, 0.90f),
+                    0.30f * opacity);
     drawStarSparkle(visual.x + visual.width * 0.35f + state.starYaw * 12.0f,
                     visual.y + visual.height * 0.27f + state.starPitch * 10.0f,
                     10.5f + pulse * 2.4f,
