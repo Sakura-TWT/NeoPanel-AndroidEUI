@@ -1,8 +1,9 @@
-# NeoPanel Android ELF
+# NeoPanel AndroidEUI
 
 NeoPanel Android ELF 是 EUI-NEO 的 Android root ELF 移植实现。
 
-它不是 APK，也不是新的 UI 框架。仓库保留的是一条 Android ELF 路线：从 root shell 启动 arm64 ELF，由程序创建 Android Surface，把 `ANativeWindow` 交给 Vulkan，并用 EUI-NEO 的 primitive 绘制界面。
+仓库保留的是一条 Android ELF 路线：从 root shell 启动 arm64 ELF，由程序创建 Android Surface，把 `ANativeWindow` 交给 Vulkan，并用 EUI-NEO 的 primitive 绘制界面。
+仓库内源码实际编译效果仅为示例作用
 
 移植来源：
 
