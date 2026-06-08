@@ -38,6 +38,7 @@ constexpr float kFpsMax = 120.0f;
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kStarTextureSize = 288;
 constexpr int kStarOutlinePointCount = 64;
+constexpr int kStarFacetPointCount = 10;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
 
@@ -662,6 +663,10 @@ void drawPolygonAbs(const std::array<core::Vec2, 4>& points, const core::Color& 
     drawPolygonAbs(points.data(), points.size(), color, opacity);
 }
 
+void drawPolygonAbs(const std::array<core::Vec2, 3>& points, const core::Color& color, float opacity = 1.0f) {
+    drawPolygonAbs(points.data(), points.size(), color, opacity);
+}
+
 int glyphIndex(char ch) {
     if (ch >= '0' && ch <= '9') {
         return ch - '0';
@@ -709,7 +714,6 @@ struct FontRuntime {
     bool attempted = false;
     bool ready = false;
     stbtt_fontinfo font{};
-    std::vector<unsigned char> systemFontBytes;
     const unsigned char* fontData = nullptr;
     std::size_t fontDataSize = 0;
     int fontIndex = 0;
@@ -730,35 +734,6 @@ void destroyFontTextures(core::render::RenderBackend& backend) {
         }
     }
     runtime.glyphs.clear();
-}
-
-std::vector<unsigned char> readBinaryFile(const char* path) {
-    std::vector<unsigned char> bytes;
-    if (path == nullptr) {
-        return bytes;
-    }
-
-    FILE* file = std::fopen(path, "rb");
-    if (file == nullptr) {
-        return bytes;
-    }
-    if (std::fseek(file, 0, SEEK_END) != 0) {
-        std::fclose(file);
-        return bytes;
-    }
-    const long size = std::ftell(file);
-    if (size <= 0 || std::fseek(file, 0, SEEK_SET) != 0) {
-        std::fclose(file);
-        return bytes;
-    }
-
-    bytes.resize(static_cast<std::size_t>(size));
-    const std::size_t read = std::fread(bytes.data(), 1u, bytes.size(), file);
-    std::fclose(file);
-    if (read != bytes.size()) {
-        bytes.clear();
-    }
-    return bytes;
 }
 
 bool tryInitFont(FontRuntime& runtime,
@@ -787,50 +762,6 @@ bool tryInitFont(FontRuntime& runtime,
     return true;
 }
 
-std::vector<std::string> systemFontCandidatesFromXml(const char* path) {
-    std::vector<std::string> candidates;
-    std::vector<unsigned char> bytes = readBinaryFile(path);
-    if (bytes.empty()) {
-        return candidates;
-    }
-    const std::string xml(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    std::size_t pos = 0;
-    while ((pos = xml.find("<font", pos)) != std::string::npos) {
-        const std::size_t close = xml.find("</font>", pos);
-        if (close == std::string::npos) {
-            break;
-        }
-        const std::size_t nameStart = xml.find('>', pos);
-        if (nameStart == std::string::npos || nameStart >= close) {
-            pos = close + 7u;
-            continue;
-        }
-        std::string name = xml.substr(nameStart + 1u, close - nameStart - 1u);
-        const std::size_t first = name.find_first_not_of(" \t\r\n");
-        const std::size_t last = name.find_last_not_of(" \t\r\n");
-        if (first == std::string::npos || last == std::string::npos) {
-            pos = close + 7u;
-            continue;
-        }
-        name = name.substr(first, last - first + 1u);
-        if (name.find(".ttf") != std::string::npos ||
-            name.find(".ttc") != std::string::npos ||
-            name.find(".otf") != std::string::npos) {
-            const bool likelyCjk = name.find("CJK") != std::string::npos ||
-                                   name.find("MiSans") != std::string::npos ||
-                                   name.find("DroidSansFallback") != std::string::npos ||
-                                   name.find("NotoSansSC") != std::string::npos ||
-                                   name.find("NotoSerifCJK") != std::string::npos ||
-                                   name.find("NotoSansHans") != std::string::npos;
-            if (likelyCjk) {
-                candidates.push_back(std::string("/system/fonts/") + name);
-            }
-        }
-        pos = close + 7u;
-    }
-    return candidates;
-}
-
 bool ensureFontRuntime() {
     FontRuntime& runtime = fontRuntime();
     if (runtime.attempted) {
@@ -838,78 +769,22 @@ bool ensureFontRuntime() {
     }
     runtime.attempted = true;
 
-    std::vector<std::string> candidates;
-    const std::array<const char*, 2> fontXmlFiles{{
-        "/system/etc/fonts.xml",
-        "/system/etc/fallback_fonts.xml",
-    }};
-    for (const char* xmlPath : fontXmlFiles) {
-        std::vector<std::string> parsed = systemFontCandidatesFromXml(xmlPath);
-        candidates.insert(candidates.end(), parsed.begin(), parsed.end());
-    }
-    const std::array<const char*, 14> directCandidates{{
-        "/system/fonts/MiSansVF.ttf",
-        "/product/fonts/MiSansVF.ttf",
-        "/system/fonts/MiSans-Regular.ttf",
-        "/product/fonts/MiSans-Regular.ttf",
-        "/system/fonts/MiSans-Semibold.ttf",
-        "/system/fonts/DroidSansFallback.ttf",
-        "/system/fonts/NotoSansCJK-Regular.ttf",
-        "/system/fonts/NotoSansCJK-Regular.ttc",
-        "/system/fonts/NotoSansCJKsc-Regular.otf",
-        "/system/fonts/NotoSansSC-Regular.otf",
-        "/system/fonts/NotoSerifCJK-Regular.ttc",
-        "/system/fonts/SourceHanSansCN-Regular.otf",
-        "/system/fonts/SourceHanSansCN-Regular.ttf",
-        "/system/fonts/Roboto-Regular.ttf",
-    }};
-    for (const char* candidate : directCandidates) {
-        candidates.emplace_back(candidate);
-    }
-
-    for (const std::string& candidate : candidates) {
-        std::vector<unsigned char> bytes = readBinaryFile(candidate.c_str());
-        if (bytes.empty()) {
-            continue;
-        }
-        for (int index = 0; index < 8; ++index) {
-            if (tryInitFont(runtime, bytes.data(), bytes.size(), index, candidate.c_str(), true)) {
-                runtime.systemFontBytes = std::move(bytes);
-                runtime.ready = tryInitFont(runtime,
-                                            runtime.systemFontBytes.data(),
-                                            runtime.systemFontBytes.size(),
-                                            index,
-                                            candidate.c_str(),
-                                            true);
-                if (runtime.ready) {
-                    return true;
-                }
-            }
+    runtime.ready = false;
+    for (int index = 0; index < 8; ++index) {
+        if (tryInitFont(runtime,
+                        neopanel::assets::uiFontTtf,
+                        neopanel::assets::uiFontTtfSize,
+                        index,
+                        "embedded-pingfang-ui-font",
+                        true)) {
+            runtime.ready = true;
+            break;
         }
     }
-
-    runtime.ready = tryInitFont(runtime,
-                                neopanel::assets::uiFontTtf,
-                                neopanel::assets::uiFontTtfSize,
-                                0,
-                                "embedded-ui-font",
-                                false);
     if (!runtime.ready) {
         __android_log_print(ANDROID_LOG_ERROR, "NeoPanel", "Failed to initialize UI font");
     }
     return runtime.ready;
-}
-
-bool containsNonAscii(const char* text) {
-    if (text == nullptr) {
-        return false;
-    }
-    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p != 0; ++p) {
-        if (*p >= 0x80) {
-            return true;
-        }
-    }
-    return false;
 }
 
 bool nextCodepoint(const char*& text, std::uint32_t& codepoint) {
@@ -943,7 +818,7 @@ bool nextCodepoint(const char*& text, std::uint32_t& codepoint) {
 }
 
 int fontPixelHeight(float scale) {
-    return std::clamp(static_cast<int>(std::round(scale * 19.0f)), 16, 78);
+    return std::clamp(static_cast<int>(std::round(scale * 18.5f)), 16, 78);
 }
 
 float pixelTextWidth(const char* text, float scale) {
@@ -2366,16 +2241,21 @@ core::Transform starSurfaceTransform(float yaw, float pitch, float pressed, floa
     const float depthT = clamp01(depth);
     core::Transform transform;
     transform.origin = {0.5f, 0.5f};
-    transform.rotate = yaw * 0.045f;
-    transform.rotateX = pitch * 0.64f;
-    transform.rotateY = yaw * 0.70f;
-    transform.translate = {yaw * (13.0f - depthT * 34.0f),
-                           pitch * (8.0f + depthT * 22.0f) - pressed * (3.2f - depthT * 1.2f)};
-    transform.translateZ = 60.0f + pressed * 16.0f - depthT * 78.0f;
-    transform.perspective = 630.0f;
-    const float scale = 1.018f + pressed * 0.020f - depthT * 0.010f;
+    transform.rotate = yaw * 0.050f;
+    transform.rotateX = pitch * 0.76f;
+    transform.rotateY = yaw * 0.84f;
+    transform.translate = {yaw * (15.0f - depthT * 48.0f),
+                           pitch * (9.0f + depthT * 34.0f) - pressed * (3.6f - depthT * 1.4f)};
+    transform.translateZ = 70.0f + pressed * 18.0f - depthT * 106.0f;
+    transform.perspective = 570.0f;
+    const float scale = 1.022f + pressed * 0.024f - depthT * 0.018f;
     transform.scale = {scale, scale};
     return transform;
+}
+
+core::Vec2 projectPoint(const core::TransformMatrix& matrix, const core::Vec2& point) {
+    const core::Vec3 p = core::transformPointWithW(matrix, point.x, point.y);
+    return {p.x, p.y};
 }
 
 std::array<core::Vec2, kStarOutlinePointCount> starOutlinePoints(const core::Rect& visual) {
@@ -2394,17 +2274,66 @@ std::array<core::Vec2, kStarOutlinePointCount> starOutlinePoints(const core::Rec
     return points;
 }
 
+std::array<core::Vec2, kStarFacetPointCount> starFacetPoints(const core::Rect& visual) {
+    std::array<core::Vec2, kStarFacetPointCount> points{};
+    const float centerX = visual.x + visual.width * 0.5f;
+    const float centerY = visual.y + visual.height * 0.5f;
+    for (int i = 0; i < kStarFacetPointCount; ++i) {
+        const float angle = -kPi * 0.5f + static_cast<float>(i) * (kPi / 5.0f);
+        const float radius = premiumStarRadius(angle) * (i % 2 == 0 ? 0.988f : 0.965f);
+        points[static_cast<std::size_t>(i)] = {
+            centerX + std::cos(angle) * radius * visual.width * 0.5f,
+            centerY + std::sin(angle) * radius * visual.height * 0.5f
+        };
+    }
+    return points;
+}
+
 std::array<core::Vec2, kStarOutlinePointCount> projectStarOutline(
     const std::array<core::Vec2, kStarOutlinePointCount>& points,
     const core::TransformMatrix& matrix) {
     std::array<core::Vec2, kStarOutlinePointCount> projected{};
     for (int i = 0; i < kStarOutlinePointCount; ++i) {
-        const core::Vec3 p = core::transformPointWithW(matrix,
-                                                       points[static_cast<std::size_t>(i)].x,
-                                                       points[static_cast<std::size_t>(i)].y);
-        projected[static_cast<std::size_t>(i)] = {p.x, p.y};
+        projected[static_cast<std::size_t>(i)] = projectPoint(matrix, points[static_cast<std::size_t>(i)]);
     }
     return projected;
+}
+
+std::array<core::Vec2, kStarFacetPointCount> projectStarFacets(
+    const std::array<core::Vec2, kStarFacetPointCount>& points,
+    const core::TransformMatrix& matrix) {
+    std::array<core::Vec2, kStarFacetPointCount> projected{};
+    for (int i = 0; i < kStarFacetPointCount; ++i) {
+        projected[static_cast<std::size_t>(i)] = projectPoint(matrix, points[static_cast<std::size_t>(i)]);
+    }
+    return projected;
+}
+
+void drawStarBackVolume(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
+    if (opacity <= 0.001f) {
+        return;
+    }
+
+    const auto facets = starFacetPoints(visual);
+    const core::TransformMatrix backMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 1.0f));
+    const auto back = projectStarFacets(facets, backMatrix);
+    const core::Vec2 center = projectPoint(backMatrix, {visual.x + visual.width * 0.5f, visual.y + visual.height * 0.5f});
+    const float tilt = std::clamp(std::sqrt(yaw * yaw + pitch * pitch) / 0.60f, 0.0f, 1.0f);
+
+    for (int i = 0; i < kStarFacetPointCount; ++i) {
+        const int next = (i + 1) % kStarFacetPointCount;
+        const float angle = -kPi * 0.5f + (static_cast<float>(i) + 0.5f) * (kPi / 5.0f);
+        const float facing = std::clamp(0.45f + (-yaw * std::cos(angle) + pitch * std::sin(angle)) * 0.55f, 0.0f, 1.0f);
+        const core::Color backColor = mix(rgba(0.34f, 0.22f, 0.54f, 1.0f),
+                                          rgba(0.74f, 0.58f, 0.90f, 1.0f),
+                                          facing);
+        const std::array<core::Vec2, 3> tri{{
+            center,
+            back[static_cast<std::size_t>(i)],
+            back[static_cast<std::size_t>(next)]
+        }};
+        drawPolygonAbs(tri, rgba(backColor.r, backColor.g, backColor.b, 0.030f + facing * 0.045f + tilt * 0.020f + pressed * 0.012f), opacity);
+    }
 }
 
 void drawStarExtrudedSides(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
@@ -2425,11 +2354,11 @@ void drawStarExtrudedSides(const core::Rect& visual, float yaw, float pitch, flo
         const float angle = -kPi * 0.5f + t * kPi * 2.0f;
         const float nx = std::cos(angle);
         const float ny = std::sin(angle);
-        const float facing = std::clamp(0.48f + (-yaw * nx + pitch * ny) * 0.92f, 0.0f, 1.0f);
-        const float alpha = 0.070f + facing * 0.19f + tilt * 0.055f + pressed * 0.030f;
-        const core::Color sideColor = mix(rgba(0.42f, 0.31f, 0.70f, 1.0f),
-                                          rgba(0.94f, 0.80f, 1.0f, 1.0f),
-                                          facing);
+        const float facing = std::clamp(0.50f + (-yaw * nx + pitch * ny) * 1.10f, 0.0f, 1.0f);
+        const float alpha = 0.060f + facing * 0.22f + tilt * 0.070f + pressed * 0.034f;
+        const core::Color sideColor = mix(rgba(0.38f, 0.26f, 0.63f, 1.0f),
+                                          rgba(0.96f, 0.82f, 1.0f, 1.0f),
+                                          std::pow(facing, 0.82f));
         const std::array<core::Vec2, 4> quad{{
             back[static_cast<std::size_t>(i)],
             back[static_cast<std::size_t>(next)],
@@ -2439,7 +2368,7 @@ void drawStarExtrudedSides(const core::Rect& visual, float yaw, float pitch, flo
         drawPolygonAbs(quad, rgba(sideColor.r, sideColor.g, sideColor.b, alpha), opacity);
 
         if (facing > 0.52f || (i % 7) == 0) {
-            const float rimAlpha = (0.060f + facing * 0.16f + pressed * 0.028f) * opacity;
+            const float rimAlpha = (0.055f + facing * 0.18f + pressed * 0.032f) * opacity;
             drawLine(front[static_cast<std::size_t>(i)].x,
                      front[static_cast<std::size_t>(i)].y,
                      front[static_cast<std::size_t>(next)].x,
@@ -2449,6 +2378,80 @@ void drawStarExtrudedSides(const core::Rect& visual, float yaw, float pitch, flo
                      rimAlpha);
         }
     }
+}
+
+void drawStarFaceFacets(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
+    if (opacity <= 0.001f) {
+        return;
+    }
+
+    const auto facets = starFacetPoints(visual);
+    const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f));
+    const auto front = projectStarFacets(facets, matrix);
+    const core::Vec2 center = projectPoint(matrix, {visual.x + visual.width * 0.5f, visual.y + visual.height * 0.5f});
+    const core::Vec3 light = normalize3({-0.46f + yaw * 0.20f, -0.74f - pitch * 0.12f, 1.0f});
+
+    for (int i = 0; i < kStarFacetPointCount; ++i) {
+        const int next = (i + 1) % kStarFacetPointCount;
+        const float midAngle = -kPi * 0.5f + (static_cast<float>(i) + 0.5f) * (kPi / 5.0f);
+        const bool outerFacet = (i % 2) == 0;
+        const core::Vec3 facetNormal = normalize3({std::cos(midAngle) * (outerFacet ? 0.52f : 0.34f) - yaw * 0.20f,
+                                                   std::sin(midAngle) * (outerFacet ? 0.52f : 0.34f) + pitch * 0.16f,
+                                                   1.02f});
+        const float lit = std::clamp(dot3(facetNormal, light) * 0.5f + 0.5f, 0.0f, 1.0f);
+        const float ridgePulse = outerFacet ? 0.018f : 0.0f;
+        const float alpha = 0.016f + lit * 0.050f + ridgePulse + pressed * 0.016f;
+        const core::Color facetColor = mix(rgba(0.48f, 0.38f, 0.78f, 1.0f),
+                                           rgba(1.0f, 0.96f, 1.0f, 1.0f),
+                                           std::pow(lit, 1.35f));
+        const std::array<core::Vec2, 3> tri{{
+            center,
+            front[static_cast<std::size_t>(i)],
+            front[static_cast<std::size_t>(next)]
+        }};
+        const float valleyShadow = std::pow(1.0f - lit, 1.22f) * (outerFacet ? 0.050f : 0.068f);
+        if (valleyShadow > 0.010f) {
+            drawPolygonAbs(tri, rgba(0.30f, 0.22f, 0.48f, valleyShadow + pressed * 0.010f), opacity);
+        }
+        drawPolygonAbs(tri, rgba(facetColor.r, facetColor.g, facetColor.b, alpha), opacity);
+
+        if (outerFacet || lit > 0.62f) {
+            const float lineAlpha = (0.030f + lit * 0.075f + pressed * 0.014f) * opacity;
+            drawLine(center.x,
+                     center.y,
+                     front[static_cast<std::size_t>(i)].x,
+                     front[static_cast<std::size_t>(i)].y,
+                     outerFacet ? 1.15f : 0.70f,
+                     rgba(1.0f, 0.94f, 1.0f, 0.72f),
+                     lineAlpha);
+        } else {
+            const float shadowAlpha = (0.020f + (1.0f - lit) * 0.045f) * opacity;
+            drawLine(center.x,
+                     center.y,
+                     front[static_cast<std::size_t>(i)].x,
+                     front[static_cast<std::size_t>(i)].y,
+                     0.80f,
+                     rgba(0.38f, 0.26f, 0.58f, 0.62f),
+                     shadowAlpha);
+        }
+    }
+
+    for (int i = 0; i < kStarFacetPointCount; ++i) {
+        const int next = (i + 1) % kStarFacetPointCount;
+        const float edgeAlpha = ((i % 2) == 0 ? 0.045f : 0.026f) * opacity;
+        drawLine(front[static_cast<std::size_t>(i)].x,
+                 front[static_cast<std::size_t>(i)].y,
+                 front[static_cast<std::size_t>(next)].x,
+                 front[static_cast<std::size_t>(next)].y,
+                 (i % 2) == 0 ? 1.10f : 0.72f,
+                 rgba(1.0f, 0.93f, 1.0f, 0.78f),
+                 edgeAlpha + pressed * 0.018f * opacity);
+    }
+
+    const core::Vec2 flashA = projectPoint(matrix, {visual.x + visual.width * 0.43f, visual.y + visual.height * 0.30f});
+    const core::Vec2 flashB = projectPoint(matrix, {visual.x + visual.width * 0.64f, visual.y + visual.height * 0.42f});
+    drawStarSparkle(flashA.x, flashA.y, 8.0f + pressed * 1.8f, rgba(1.0f, 0.96f, 1.0f, 0.90f), 0.22f * opacity);
+    drawAccentDot(flashB.x, flashB.y, 3.2f + pressed * 0.8f, rgba(0.88f, 0.78f, 1.0f, 0.70f), 0.24f * opacity);
 }
 
 void drawStarFace(core::render::RenderBackend::TextureHandle handle,
@@ -2533,15 +2536,17 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     const bool starTextureReady = state.starTexture.handle != nullptr && state.starTexture.drawHoldFrames <= 0;
 
     if (starTextureReady) {
-        drawSafeStarGlow(visual.x + visual.width * 0.19f + state.starYaw * 12.0f,
-                         visual.y + visual.height * 0.70f + state.starPitch * 6.0f,
+        drawSafeStarGlow(visual.x + visual.width * 0.18f + state.starYaw * 14.0f,
+                         visual.y + visual.height * 0.69f + state.starPitch * 8.0f,
                          visual.width * 0.62f,
                          visual.height * 0.12f,
                          32.0f,
                          rgba(0.58f, 0.48f, 0.86f, 0.012f + pressed * 0.007f),
                          opacity);
+        drawStarBackVolume(visual, state.starYaw, state.starPitch, pressed, opacity);
         drawStarExtrudedSides(visual, state.starYaw, state.starPitch, pressed, opacity);
         drawStarFace(state.starTexture.handle, visual, state.starYaw, state.starPitch, pressed, opacity);
+        drawStarFaceFacets(visual, state.starYaw, state.starPitch, pressed, opacity);
     }
     if (state.starTexture.drawHoldFrames > 0) {
         --state.starTexture.drawHoldFrames;

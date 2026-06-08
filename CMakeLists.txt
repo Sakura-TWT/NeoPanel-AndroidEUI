@@ -8,12 +8,16 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(EUI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/EUI-NEO" CACHE PATH "EUI-NEO source root")
 set(NEOPANEL_ANDROID_ELF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/eui_android_elf")
+set(NEOPANEL_UI_FONT "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/iOS26-PingFang-Jian-VF.ttf")
 
 if(NOT EXISTS "${EUI_ROOT}/include/eui_neo.h")
     message(FATAL_ERROR "EUI_ROOT does not point to an EUI-NEO source tree. Run `git submodule update --init --recursive` or pass -DEUI_ROOT=<EUI-NEO source root>.")
 endif()
 if(NOT EXISTS "${NEOPANEL_ANDROID_ELF_ROOT}/core/platform/android/native_surface/ANativeWindowCreator.h")
     message(FATAL_ERROR "NeoPanel Android ELF adapter files are missing")
+endif()
+if(NOT EXISTS "${NEOPANEL_UI_FONT}")
+    message(FATAL_ERROR "NeoPanel UI font is missing: ${NEOPANEL_UI_FONT}")
 endif()
 
 find_package(Threads REQUIRED)
@@ -33,11 +37,11 @@ add_custom_command(
 add_custom_command(
     OUTPUT "${NEOPANEL_EMBEDDED_FONT}"
     COMMAND ${CMAKE_COMMAND}
-        -DINPUT="${EUI_ROOT}/assets/JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf"
+        -DINPUT="${NEOPANEL_UI_FONT}"
         -DOUTPUT="${NEOPANEL_EMBEDDED_FONT}"
         -DSYMBOL=uiFontTtf
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake"
-    DEPENDS "${EUI_ROOT}/assets/JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake"
+    DEPENDS "${NEOPANEL_UI_FONT}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake"
     VERBATIM
 )
 

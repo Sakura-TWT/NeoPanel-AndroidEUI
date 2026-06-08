@@ -6,6 +6,7 @@
 CMakeLists.txt
 cmake/embed_binary.cmake
 src/neopanel/embedded_assets.h
+assets/fonts/iOS26-PingFang-Jian-VF.ttf
 picture/avatar.png
 ```
 
@@ -15,17 +16,17 @@ picture/avatar.png
 
 ```text
 picture/avatar.png -> embedded_avatar.cpp
-EUI-NEO fallback font -> embedded_ui_font.cpp
+assets/fonts/iOS26-PingFang-Jian-VF.ttf -> embedded_ui_font.cpp
 ```
 
-字体来自 EUI-NEO 上游资源目录。
+UI 字体固定使用仓库内嵌的 PingFang 简体可变字体，不再优先读取设备系统字体。
 
 ## 运行时
 
 - `stb_image` 从内存解码头像。
 - 渲染后端上传头像纹理。
 - `stb_truetype` 栅格化文字 glyph。
-- Android 系统 CJK 字体优先，失败后使用嵌入字体。
+- 文本只使用编译期嵌入字体，保证不同 Android 设备上的字形一致。
 
 ## 部署形态
 

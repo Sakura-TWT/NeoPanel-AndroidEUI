@@ -21,11 +21,13 @@ EUI-NEO -> https://github.com/sudoevolve/EUI-NEO
 ## 目录结构
 
 ```text
+assets/
+  fonts/iOS26-PingFang-Jian-VF.ttf    编译期嵌入的统一 UI 字体
 src/
   neopanel/                         NeoPanel 面板样例
   eui_android_elf/                  EUI-NEO Android ELF 适配层
 cmake/
-  embed_binary.cmake                将 PNG/TTF 转成 C++ 字节数组
+  embed_binary.cmake                将 PNG/TTF 嵌入生成文件
   vulkan_portability_compat.h       Vulkan 兼容宏
 docs/
   BUILD_AND_RUN.md                  构建、部署、验证
