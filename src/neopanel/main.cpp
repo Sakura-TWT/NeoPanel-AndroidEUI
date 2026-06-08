@@ -37,6 +37,7 @@ constexpr float kFpsMin = 30.0f;
 constexpr float kFpsMax = 120.0f;
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kStarTextureSize = 288;
+constexpr int kStarOutlinePointCount = 64;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
 
@@ -619,8 +620,8 @@ void drawLine(float x1, float y1, float x2, float y2, float thickness, const cor
                 transform);
 }
 
-void drawPolygonAbs(const std::array<core::Vec2, 4>& points, const core::Color& color, float opacity = 1.0f) {
-    if (opacity <= 0.001f || color.a <= 0.001f) {
+void drawPolygonAbs(const core::Vec2* points, std::size_t count, const core::Color& color, float opacity = 1.0f) {
+    if (points == nullptr || count < 3 || opacity <= 0.001f || color.a <= 0.001f) {
         return;
     }
 
@@ -628,20 +629,20 @@ void drawPolygonAbs(const std::array<core::Vec2, 4>& points, const core::Color& 
     float minY = points[0].y;
     float maxX = points[0].x;
     float maxY = points[0].y;
-    for (const core::Vec2& point : points) {
-        minX = std::min(minX, point.x);
-        minY = std::min(minY, point.y);
-        maxX = std::max(maxX, point.x);
-        maxY = std::max(maxY, point.y);
+    for (std::size_t i = 0; i < count; ++i) {
+        minX = std::min(minX, points[i].x);
+        minY = std::min(minY, points[i].y);
+        maxX = std::max(maxX, points[i].x);
+        maxY = std::max(maxY, points[i].y);
     }
     if (maxX <= minX || maxY <= minY) {
         return;
     }
 
     std::vector<core::Vec2> relative;
-    relative.reserve(points.size());
-    for (const core::Vec2& point : points) {
-        relative.push_back({point.x - minX, point.y - minY});
+    relative.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        relative.push_back({points[i].x - minX, points[i].y - minY});
     }
 
     core::PolygonPrimitive primitive;
@@ -651,6 +652,14 @@ void drawPolygonAbs(const std::array<core::Vec2, 4>& points, const core::Color& 
     primitive.setColor(color);
     primitive.setOpacity(opacity);
     primitive.render(kPanelWidth, kPanelHeight);
+}
+
+void drawPolygonAbs(const std::vector<core::Vec2>& points, const core::Color& color, float opacity = 1.0f) {
+    drawPolygonAbs(points.data(), points.size(), color, opacity);
+}
+
+void drawPolygonAbs(const std::array<core::Vec2, 4>& points, const core::Color& color, float opacity = 1.0f) {
+    drawPolygonAbs(points.data(), points.size(), color, opacity);
 }
 
 int glyphIndex(char ch) {
@@ -934,7 +943,7 @@ bool nextCodepoint(const char*& text, std::uint32_t& codepoint) {
 }
 
 int fontPixelHeight(float scale) {
-    return std::clamp(static_cast<int>(std::round(scale * 17.0f)), 15, 72);
+    return std::clamp(static_cast<int>(std::round(scale * 19.0f)), 16, 78);
 }
 
 float pixelTextWidth(const char* text, float scale) {
@@ -1784,8 +1793,8 @@ void renderNavigation(PanelState& state, float opacity) {
 
         drawNavIcon(kNavItems[static_cast<std::size_t>(i)].icon, r.x + 20.0f, r.y + 16.0f, 40.0f, mix(rgba(0.58f, 0.76f, 1.0f, 1.0f), accent, active), opacity);
         const NavItem& item = kNavItems[static_cast<std::size_t>(i)];
-        drawTextFit(r.x + 72.0f, r.y + 18.0f, 78.0f, tr(item.labelEn, item.labelZh), 1.62f, textMain(), opacity, 1.08f);
-        drawTextFit(r.x + 72.0f, r.y + 45.0f, 78.0f, tr(item.detailEn, item.detailZh), 1.03f, textSoft(), opacity * 0.82f, 0.82f);
+        drawTextFit(r.x + 72.0f, r.y + 15.0f, 78.0f, tr(item.labelEn, item.labelZh), 1.54f, textMain(), opacity, 1.02f);
+        drawTextFit(r.x + 72.0f, r.y + 48.0f, 78.0f, tr(item.detailEn, item.detailZh), 0.96f, textSoft(), opacity * 0.82f, 0.78f);
     }
 }
 
@@ -2353,49 +2362,120 @@ void drawCenteredStarGlow(const core::Rect& visual,
                      opacity);
 }
 
-core::Transform starVolumeTransform(float yaw,
-                                    float pitch,
-                                    float pressed,
-                                    float depth,
-                                    float layerScale,
-                                    float yawScale,
-                                    float pitchScale) {
+core::Transform starSurfaceTransform(float yaw, float pitch, float pressed, float depth) {
+    const float depthT = clamp01(depth);
     core::Transform transform;
     transform.origin = {0.5f, 0.5f};
-    transform.rotate = yaw * 0.090f;
-    transform.rotateX = pitch * pitchScale;
-    transform.rotateY = yaw * yawScale;
-    transform.translate = {yaw * (21.0f + depth * 30.0f),
-                           pitch * (14.0f + depth * 24.0f) - pressed * (3.0f + depth * 3.0f)};
-    transform.translateZ = 58.0f + pressed * 22.0f - depth * 72.0f;
-    transform.perspective = 500.0f;
-    transform.scale = {layerScale + pressed * 0.032f, layerScale + pressed * 0.032f};
+    transform.rotate = yaw * 0.045f;
+    transform.rotateX = pitch * 0.64f;
+    transform.rotateY = yaw * 0.70f;
+    transform.translate = {yaw * (13.0f - depthT * 34.0f),
+                           pitch * (8.0f + depthT * 22.0f) - pressed * (3.2f - depthT * 1.2f)};
+    transform.translateZ = 60.0f + pressed * 16.0f - depthT * 78.0f;
+    transform.perspective = 630.0f;
+    const float scale = 1.018f + pressed * 0.020f - depthT * 0.010f;
+    transform.scale = {scale, scale};
     return transform;
 }
 
-void drawStarVolumeLayer(core::render::RenderBackend::TextureHandle handle,
-                         const core::Rect& visual,
-                         float yaw,
-                         float pitch,
-                         float pressed,
-                         float depth,
-                         float layerScale,
-                         float yawScale,
-                         float pitchScale,
-                         const core::Color& tint,
-                         float opacity) {
+std::array<core::Vec2, kStarOutlinePointCount> starOutlinePoints(const core::Rect& visual) {
+    std::array<core::Vec2, kStarOutlinePointCount> points{};
+    const float centerX = visual.x + visual.width * 0.5f;
+    const float centerY = visual.y + visual.height * 0.5f;
+    for (int i = 0; i < kStarOutlinePointCount; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kStarOutlinePointCount);
+        const float angle = -kPi * 0.5f + t * kPi * 2.0f;
+        const float radius = premiumStarRadius(angle) * 0.985f;
+        points[static_cast<std::size_t>(i)] = {
+            centerX + std::cos(angle) * radius * visual.width * 0.5f,
+            centerY + std::sin(angle) * radius * visual.height * 0.5f
+        };
+    }
+    return points;
+}
+
+std::array<core::Vec2, kStarOutlinePointCount> projectStarOutline(
+    const std::array<core::Vec2, kStarOutlinePointCount>& points,
+    const core::TransformMatrix& matrix) {
+    std::array<core::Vec2, kStarOutlinePointCount> projected{};
+    for (int i = 0; i < kStarOutlinePointCount; ++i) {
+        const core::Vec3 p = core::transformPointWithW(matrix,
+                                                       points[static_cast<std::size_t>(i)].x,
+                                                       points[static_cast<std::size_t>(i)].y);
+        projected[static_cast<std::size_t>(i)] = {p.x, p.y};
+    }
+    return projected;
+}
+
+void drawStarExtrudedSides(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
+    if (opacity <= 0.001f) {
+        return;
+    }
+
+    const auto outline = starOutlinePoints(visual);
+    const core::TransformMatrix frontMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f));
+    const core::TransformMatrix backMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 1.0f));
+    const auto front = projectStarOutline(outline, frontMatrix);
+    const auto back = projectStarOutline(outline, backMatrix);
+    const float tilt = std::clamp(std::sqrt(yaw * yaw + pitch * pitch) / 0.58f, 0.0f, 1.0f);
+
+    for (int i = 0; i < kStarOutlinePointCount; ++i) {
+        const int next = (i + 1) % kStarOutlinePointCount;
+        const float t = (static_cast<float>(i) + 0.5f) / static_cast<float>(kStarOutlinePointCount);
+        const float angle = -kPi * 0.5f + t * kPi * 2.0f;
+        const float nx = std::cos(angle);
+        const float ny = std::sin(angle);
+        const float facing = std::clamp(0.48f + (-yaw * nx + pitch * ny) * 0.92f, 0.0f, 1.0f);
+        const float alpha = 0.070f + facing * 0.19f + tilt * 0.055f + pressed * 0.030f;
+        const core::Color sideColor = mix(rgba(0.42f, 0.31f, 0.70f, 1.0f),
+                                          rgba(0.94f, 0.80f, 1.0f, 1.0f),
+                                          facing);
+        const std::array<core::Vec2, 4> quad{{
+            back[static_cast<std::size_t>(i)],
+            back[static_cast<std::size_t>(next)],
+            front[static_cast<std::size_t>(next)],
+            front[static_cast<std::size_t>(i)]
+        }};
+        drawPolygonAbs(quad, rgba(sideColor.r, sideColor.g, sideColor.b, alpha), opacity);
+
+        if (facing > 0.52f || (i % 7) == 0) {
+            const float rimAlpha = (0.060f + facing * 0.16f + pressed * 0.028f) * opacity;
+            drawLine(front[static_cast<std::size_t>(i)].x,
+                     front[static_cast<std::size_t>(i)].y,
+                     front[static_cast<std::size_t>(next)].x,
+                     front[static_cast<std::size_t>(next)].y,
+                     0.85f + facing * 1.05f,
+                     rgba(1.0f, 0.92f, 1.0f, 0.72f),
+                     rimAlpha);
+        }
+    }
+}
+
+void drawStarFace(core::render::RenderBackend::TextureHandle handle,
+                  const core::Rect& visual,
+                  float yaw,
+                  float pitch,
+                  float pressed,
+                  float opacity) {
     if (handle == nullptr || opacity <= 0.001f) {
         return;
     }
-    const core::Transform transform = starVolumeTransform(yaw, pitch, pressed, depth, layerScale, yawScale, pitchScale);
-    const core::TransformMatrix matrix = matrixForTransform(visual, transform);
+    const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f));
     drawTextureQuadMatrix(handle,
                           visual.x,
                           visual.y,
                           visual.width,
                           visual.height,
                           matrix,
-                          rgba(tint.r, tint.g, tint.b, tint.a * opacity),
+                          rgba(1.0f, 1.0f, 1.0f, opacity),
+                          0.0f);
+    drawTextureQuadMatrix(handle,
+                          visual.x,
+                          visual.y,
+                          visual.width,
+                          visual.height,
+                          matrix,
+                          rgba(1.0f, 0.92f, 1.0f, (0.070f + pressed * 0.045f) * opacity),
                           0.0f);
 }
 
@@ -2453,68 +2533,15 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     const bool starTextureReady = state.starTexture.handle != nullptr && state.starTexture.drawHoldFrames <= 0;
 
     if (starTextureReady) {
-        drawSafeStarGlow(visual.x + visual.width * 0.16f + state.starYaw * 22.0f,
-                         visual.y + visual.height * 0.68f + state.starPitch * 10.0f,
-                         visual.width * 0.68f,
-                         visual.height * 0.16f,
-                         34.0f,
-                         rgba(0.05f, 0.02f, 0.08f, 0.018f + pressed * 0.010f),
+        drawSafeStarGlow(visual.x + visual.width * 0.19f + state.starYaw * 12.0f,
+                         visual.y + visual.height * 0.70f + state.starPitch * 6.0f,
+                         visual.width * 0.62f,
+                         visual.height * 0.12f,
+                         32.0f,
+                         rgba(0.58f, 0.48f, 0.86f, 0.012f + pressed * 0.007f),
                          opacity);
-        drawStarVolumeLayer(state.starTexture.handle,
-                            visual,
-                            state.starYaw,
-                            state.starPitch,
-                            pressed,
-                            0.38f,
-                            0.985f,
-                            0.86f,
-                            0.70f,
-                            rgba(0.46f, 0.35f, 0.74f, 0.28f),
-                            opacity);
-        drawStarVolumeLayer(state.starTexture.handle,
-                            visual,
-                            state.starYaw,
-                            state.starPitch,
-                            pressed,
-                            0.24f,
-                            1.000f,
-                            0.92f,
-                            0.78f,
-                            rgba(0.66f, 0.54f, 0.95f, 0.34f),
-                            opacity);
-        drawStarVolumeLayer(state.starTexture.handle,
-                            visual,
-                            state.starYaw,
-                            state.starPitch,
-                            pressed,
-                            0.12f,
-                            1.010f,
-                            1.02f,
-                            0.88f,
-                            rgba(0.88f, 0.80f, 1.0f, 0.50f),
-                            opacity);
-        drawStarVolumeLayer(state.starTexture.handle,
-                            visual,
-                            state.starYaw,
-                            state.starPitch,
-                            pressed,
-                            -0.02f,
-                            1.028f,
-                            1.16f,
-                            1.00f,
-                            rgba(1.0f, 1.0f, 1.0f, 1.00f),
-                            opacity);
-        drawStarVolumeLayer(state.starTexture.handle,
-                            visual,
-                            state.starYaw * 1.05f,
-                            state.starPitch * 1.08f,
-                            pressed,
-                            -0.10f,
-                            1.038f,
-                            1.20f,
-                            1.04f,
-                            rgba(1.0f, 0.92f, 1.0f, 0.18f + pressed * 0.08f),
-                            opacity);
+        drawStarExtrudedSides(visual, state.starYaw, state.starPitch, pressed, opacity);
+        drawStarFace(state.starTexture.handle, visual, state.starYaw, state.starPitch, pressed, opacity);
     }
     if (state.starTexture.drawHoldFrames > 0) {
         --state.starTexture.drawHoldFrames;
@@ -2817,10 +2844,10 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
         if (pointer.down && state.capturedStar) {
             const float centerX = starVisualRect.x + starVisualRect.width * 0.5f;
             const float centerY = starVisualRect.y + starVisualRect.height * 0.5f;
-            const float relX = std::clamp(static_cast<float>(pointer.x - centerX) / (starVisualRect.width * 0.5f), -1.0f, 1.0f);
-            const float relY = std::clamp(static_cast<float>(pointer.y - centerY) / (starVisualRect.height * 0.5f), -1.0f, 1.0f);
-            state.starTargetYaw = std::clamp(kStarRestYaw + relX * 0.86f, -1.02f, 1.02f);
-            state.starTargetPitch = std::clamp(kStarRestPitch - relY * 0.74f, -0.82f, 0.82f);
+            const float relX = std::clamp(static_cast<float>(pointer.x - centerX) / (starHitRect.width * 0.5f), -1.0f, 1.0f);
+            const float relY = std::clamp(static_cast<float>(pointer.y - centerY) / (starHitRect.height * 0.5f), -1.0f, 1.0f);
+            state.starTargetYaw = std::clamp(kStarRestYaw + relX * 0.58f, -0.70f, 0.48f);
+            state.starTargetPitch = std::clamp(kStarRestPitch - relY * 0.52f, -0.62f, 0.42f);
             interacting = true;
         } else if (!pointer.down) {
             state.starTargetYaw = approach(state.starTargetYaw, kStarRestYaw, deltaSeconds, 1.45f);
