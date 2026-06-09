@@ -11,11 +11,15 @@
 
 #include <android/log.h>
 #include <android/native_window.h>
+#include <sched.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/sysinfo.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -49,6 +53,7 @@ constexpr int kStarMeshSideBandCount = 5;
 constexpr float kStarEntrySpinDuration = 1.42f;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
+constexpr float kExitAnimationDuration = 0.96f;
 
 bool gChinese = false;
 bool gNight = true;
@@ -65,6 +70,135 @@ void installSignalHandlers() {
 #if defined(SIGHUP)
     std::signal(SIGHUP, requestShutdown);
 #endif
+}
+
+struct CpuCoreInfo {
+    int index = 0;
+    int score = 0;
+};
+
+int readSysInt(const char* path) {
+    std::FILE* file = std::fopen(path, "r");
+    if (file == nullptr) {
+        return -1;
+    }
+
+    int value = -1;
+    const int matched = std::fscanf(file, "%d", &value);
+    std::fclose(file);
+    return matched == 1 ? value : -1;
+}
+
+std::vector<CpuCoreInfo> discoverCpuCores() {
+    long count = sysconf(_SC_NPROCESSORS_CONF);
+    if (count <= 0) {
+        count = static_cast<long>(std::max(1u, std::thread::hardware_concurrency()));
+    }
+    count = std::max<long>(1, std::min<long>(count, CPU_SETSIZE));
+
+    std::vector<CpuCoreInfo> cores;
+    cores.reserve(static_cast<std::size_t>(count));
+    for (long i = 0; i < count; ++i) {
+        char path[160]{};
+        std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/online", i);
+        const int online = i == 0 ? 1 : readSysInt(path);
+        if (online == 0) {
+            continue;
+        }
+
+        std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/cpu_capacity", i);
+        const int capacity = readSysInt(path);
+        std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", i);
+        const int maxFreq = readSysInt(path);
+
+        int score = static_cast<int>(i) + 1;
+        if (capacity > 0) {
+            score += capacity * 1000;
+        }
+        if (maxFreq > 0) {
+            score += maxFreq / 100;
+        }
+        cores.push_back({static_cast<int>(i), score});
+    }
+
+    return cores;
+}
+
+std::vector<int> selectRenderCpus(std::vector<CpuCoreInfo> cores) {
+    if (cores.size() < 4) {
+        return {};
+    }
+
+    std::sort(cores.begin(), cores.end(), [](const CpuCoreInfo& a, const CpuCoreInfo& b) {
+        if (a.score == b.score) {
+            return a.index > b.index;
+        }
+        return a.score > b.score;
+    });
+
+    const std::size_t targetCount = cores.size() >= 8 ? 3u : 2u;
+    std::vector<int> selected;
+    selected.reserve(targetCount);
+    for (std::size_t i = 0; i < std::min(targetCount, cores.size()); ++i) {
+        selected.push_back(cores[i].index);
+    }
+    return selected;
+}
+
+bool applyCurrentThreadAffinity(const std::vector<int>& cpus) {
+    if (cpus.empty()) {
+        return false;
+    }
+
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    for (const int cpu : cpus) {
+        if (cpu >= 0 && cpu < CPU_SETSIZE) {
+            CPU_SET(cpu, &mask);
+        }
+    }
+    return sched_setaffinity(0, sizeof(mask), &mask) == 0;
+}
+
+void formatCpuList(const std::vector<int>& cpus, char* output, std::size_t outputSize) {
+    if (output == nullptr || outputSize == 0) {
+        return;
+    }
+
+    output[0] = '\0';
+    for (std::size_t i = 0; i < cpus.size(); ++i) {
+        char part[16]{};
+        std::snprintf(part, sizeof(part), "%s%d", i == 0 ? "" : ",", cpus[i]);
+        const std::size_t length = std::strlen(output);
+        if (length + std::strlen(part) + 1 >= outputSize) {
+            break;
+        }
+        std::strncat(output, part, outputSize - length - 1);
+    }
+}
+
+void applyRenderThreadSchedulingHints() {
+    static bool applied = false;
+    if (applied) {
+        return;
+    }
+    applied = true;
+
+#if defined(PR_SET_NAME)
+    prctl(PR_SET_NAME, "NeoPanelRender", 0, 0, 0);
+#endif
+    if (setpriority(PRIO_PROCESS, 0, -4) != 0) {
+        __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "Render nice priority unchanged: %s", std::strerror(errno));
+    }
+
+    const std::vector<int> renderCpus = selectRenderCpus(discoverCpuCores());
+    if (!renderCpus.empty() && applyCurrentThreadAffinity(renderCpus)) {
+        char cpuList[96]{};
+        formatCpuList(renderCpus, cpuList, sizeof(cpuList));
+        __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "Render thread affinity: cpu%s", cpuList);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "Render thread affinity left to Android scheduler");
+    }
 }
 
 struct EmbeddedTexture {
@@ -149,6 +283,9 @@ struct PanelState {
     bool capturedLanguage = false;
     bool pressedTheme = false;
     bool capturedTheme = false;
+    bool pressedExit = false;
+    bool capturedExit = false;
+    bool exitAnimationActive = false;
     bool pressedDemoSwitch = false;
     bool capturedDemoSwitch = false;
     bool capturedDemoSlider = false;
@@ -167,6 +304,7 @@ struct PanelState {
     bool starStageSeen = false;
     float starEntrySpinTime = 0.0f;
     float starIdleTime = 0.0f;
+    float exitAnimationTime = 0.0f;
     float navBlend = 0.0f;
     float contentScroll = 0.0f;
     float targetScroll = 0.0f;
@@ -289,6 +427,10 @@ float clamp01(float value) {
     return std::clamp(value, 0.0f, 1.0f);
 }
 
+float lerpFloat(float a, float b, float t) {
+    return a + (b - a) * clamp01(t);
+}
+
 float approach(float current, float target, float deltaSeconds, float sharpness) {
     const float t = 1.0f - std::exp(-sharpness * std::max(0.0f, deltaSeconds));
     return current + (target - current) * t;
@@ -342,6 +484,7 @@ void clearPointerCaptures(PanelState& state) {
     state.capturedDemoButton = -1;
     state.capturedLanguage = false;
     state.capturedTheme = false;
+    state.capturedExit = false;
     state.capturedDemoSwitch = false;
     state.capturedDemoSlider = false;
     state.capturedFpsSlider = false;
@@ -353,6 +496,7 @@ bool hasPointerCapture(const PanelState& state) {
            state.capturedDemoButton >= 0 ||
            state.capturedLanguage ||
            state.capturedTheme ||
+           state.capturedExit ||
            state.capturedDemoSwitch ||
            state.capturedDemoSlider ||
            state.capturedFpsSlider ||
@@ -447,6 +591,10 @@ core::Rect premiumStarVisualRect(float contentX, float contentW, float stageY) {
 
 core::Rect premiumStarHitRect(float contentX, float contentW, float stageY) {
     return expandedRect(premiumStarStageRect(contentX, contentW, stageY), 8.0f);
+}
+
+core::Rect systemExitButtonRect(float contentX, float contentW, float top, float scroll) {
+    return {contentX + 30.0f, top + 244.0f - scroll, contentW - 60.0f, 64.0f};
 }
 
 core::Rect demoButtonRect(int index, float x, float y, float width) {
@@ -3370,7 +3518,40 @@ void renderMotionPage(PanelState& state, float contentX, float contentY, float c
     }
 }
 
-void renderSystemPage(float contentX, float contentY, float contentW, float top, float bottom, float scroll, float opacity) {
+void drawSystemExitButton(const core::Rect& r, bool pressed, float opacity) {
+    const core::Color accent = pageAccent(3);
+    const float press = pressed ? 2.0f : 0.0f;
+    const float glow = pressed ? 1.0f : 0.0f;
+
+    core::Gradient fill;
+    fill.enabled = true;
+    fill.start = rgba(accent.r, accent.g, accent.b, (0.17f + glow * 0.05f) * opacity);
+    fill.end = gNight ? rgba(1.0f, 0.42f, 0.57f, (0.080f + glow * 0.030f) * opacity)
+                       : rgba(1.0f, 0.70f, 0.58f, (0.11f + glow * 0.02f) * opacity);
+    fill.direction = core::GradientDirection::Horizontal;
+
+    drawRect(r.x, r.y + press, r.width, r.height, 22.0f,
+             rgba(1.0f, 1.0f, 1.0f, 0.050f * opacity),
+             {1.0f, rgba(accent.r, accent.g, accent.b, (0.30f + glow * 0.22f) * opacity)},
+             {true, {0.0f, 12.0f}, 34.0f, 0.0f, rgba(accent.r, accent.g, accent.b, (0.12f + glow * 0.08f) * opacity)},
+             fill,
+             opacity);
+
+    drawAccentDot(r.x + 34.0f, r.y + 32.0f + press, 12.0f, rgba(accent.r, accent.g, accent.b, 0.22f), opacity);
+    drawLine(r.x + 29.0f, r.y + 32.0f + press, r.x + 39.0f, r.y + 32.0f + press, 2.5f, rgba(0.98f, 0.99f, 1.0f, 0.92f), opacity);
+    drawLine(r.x + 34.0f, r.y + 27.0f + press, r.x + 34.0f, r.y + 37.0f + press, 2.5f, rgba(0.98f, 0.99f, 1.0f, 0.92f), opacity);
+
+    drawTextFit(r.x + 58.0f, r.y + 16.0f + press, 250.0f, "EXIT PANEL", 1.02f, tileText(), opacity, 0.76f);
+    drawTextRight(r.x + r.width - 30.0f, r.y + 17.0f + press, "FLY OUT", 0.90f, rgba(accent.r, accent.g, accent.b, 0.96f), opacity);
+
+    const float ax = r.x + r.width - 92.0f;
+    const float ay = r.y + 42.0f + press;
+    drawLine(ax, ay, ax + 24.0f, ay - 16.0f, 2.2f, rgba(0.94f, 0.96f, 1.0f, 0.46f), opacity);
+    drawLine(ax + 24.0f, ay - 16.0f, ax + 20.0f, ay - 5.0f, 2.2f, rgba(0.94f, 0.96f, 1.0f, 0.46f), opacity);
+    drawLine(ax + 24.0f, ay - 16.0f, ax + 12.0f, ay - 16.0f, 2.2f, rgba(0.94f, 0.96f, 1.0f, 0.46f), opacity);
+}
+
+void renderSystemPage(PanelState& state, float contentX, float contentY, float contentW, float top, float bottom, float scroll, float opacity) {
     (void)contentY;
     const core::Color accent = pageAccent(3);
     const float y0 = top + 16.0f - scroll;
@@ -3389,7 +3570,12 @@ void renderSystemPage(float contentX, float contentY, float contentW, float top,
         drawTextRight(contentX + contentW - 54.0f, y + 14.0f, tr(status[static_cast<std::size_t>(i)]), 1.02f, rgba(accent.r, accent.g, accent.b, 1.0f), opacity);
     }
 
-    const float stackY = y0 + 250.0f;
+    const core::Rect exitRect = systemExitButtonRect(contentX, contentW, top, scroll);
+    if (itemVisible(exitRect.y, exitRect.height, top, bottom)) {
+        drawSystemExitButton(exitRect, state.pressedExit, opacity);
+    }
+
+    const float stackY = y0 + 306.0f;
     if (itemVisible(stackY, 172.0f, top, bottom)) {
         drawRect(contentX + 30.0f, stackY, contentW - 60.0f, 172.0f, 24.0f,
                  rgba(accent.r, accent.g, accent.b, 0.090f * opacity),
@@ -3418,7 +3604,7 @@ float pageScrollLimit(int page) {
     if (page == 2) {
         return 226.0f;
     }
-    return 54.0f;
+    return 122.0f;
 }
 
 void renderContent(PanelState& state, float opacity) {
@@ -3442,7 +3628,7 @@ void renderContent(PanelState& state, float opacity) {
     } else if (page == 2) {
         renderMotionPage(state, contentX, contentY, contentW, scrollTop, scrollBottom, scroll, opacity);
     } else {
-        renderSystemPage(contentX, contentY, contentW, scrollTop, scrollBottom, scroll, opacity);
+        renderSystemPage(state, contentX, contentY, contentW, scrollTop, scrollBottom, scroll, opacity);
     }
     setRenderScissor(false, {});
 
@@ -3461,9 +3647,71 @@ void renderContent(PanelState& state, float opacity) {
     }
 }
 
+void renderExitFlight(float progress) {
+    const float t = clamp01(progress);
+    const core::Color accent = pageAccent(3);
+    const float gather = smoothstep(0.0f, 0.54f, t);
+    const float lift = smoothstep(0.32f, 1.0f, t);
+    const float fadeOut = 1.0f - smoothstep(0.78f, 1.0f, t);
+    const float cx = lerpFloat(kPanelWidth * 0.5f, kPanelWidth * 0.5f - 28.0f, lift) + std::sin(t * kPi) * 18.0f;
+    const float cy = lerpFloat(kPanelHeight * 0.5f, -56.0f, lift);
+    const float w = lerpFloat(kPanelWidth - 36.0f, 30.0f, gather);
+    const float h = lerpFloat(kPanelHeight - 36.0f, 30.0f, gather);
+    const float radius = lerpFloat(44.0f, 15.0f, gather);
+    const float opacity = fadeOut * (0.42f + gather * 0.58f);
+
+    core::Gradient shell;
+    shell.enabled = true;
+    shell.start = rgba(accent.r, accent.g, accent.b, (0.26f + gather * 0.18f) * opacity);
+    shell.end = rgba(1.0f, 0.52f, 0.66f, (0.14f + gather * 0.18f) * opacity);
+    shell.direction = core::GradientDirection::Horizontal;
+
+    if (lift > 0.02f) {
+        const float trailOpacity = (1.0f - smoothstep(0.60f, 1.0f, t)) * lift;
+        for (int i = 0; i < 4; ++i) {
+            const float step = static_cast<float>(i);
+            const float ty = cy + 36.0f + step * (20.0f + lift * 10.0f);
+            const float tw = 42.0f + step * 18.0f;
+            drawRect(cx - tw * 0.5f + step * 5.0f,
+                     ty,
+                     tw,
+                     5.0f,
+                     2.5f,
+                     rgba(accent.r, accent.g, accent.b, (0.18f - step * 0.028f) * trailOpacity),
+                     {},
+                     {},
+                     {},
+                     opacity);
+        }
+    }
+
+    drawRect(cx - w * 0.5f,
+             cy - h * 0.5f,
+             w,
+             h,
+             radius,
+             rgba(1.0f, 1.0f, 1.0f, 0.040f * opacity),
+             {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.16f * opacity)},
+             {true, {0.0f, 18.0f}, 48.0f, 0.0f, rgba(accent.r, accent.g, accent.b, 0.22f * opacity)},
+             shell,
+             opacity,
+             gather * 3.5f);
+
+    const float halo = lerpFloat(92.0f, 52.0f, gather) * fadeOut;
+    drawAccentDot(cx, cy, halo, rgba(accent.r, accent.g, accent.b, 0.026f + gather * 0.050f), opacity);
+    drawAccentDot(cx, cy, lerpFloat(18.0f, 10.0f, gather), rgba(0.98f, 0.99f, 1.0f, 0.88f), opacity);
+    drawAccentDot(cx - 4.0f, cy - 5.0f, 4.0f, rgba(1.0f, 0.82f, 0.95f, 0.82f), opacity);
+}
+
 void renderPanel(PanelState& state) {
     const float intro = easeOutBack(state.launchTime / 0.72f);
-    const float fade = easeOutCubic(state.launchTime / 0.46f);
+    float fade = easeOutCubic(state.launchTime / 0.46f);
+    const float exitProgress = state.exitAnimationActive
+        ? std::clamp(state.exitAnimationTime / kExitAnimationDuration, 0.0f, 1.0f)
+        : 0.0f;
+    if (state.exitAnimationActive) {
+        fade *= 1.0f - smoothstep(0.04f, 0.48f, exitProgress);
+    }
     const float blur = (1.0f - clamp01(state.launchTime / 0.58f)) * 18.0f;
 
     core::Gradient shellGradient;
@@ -3506,6 +3754,9 @@ void renderPanel(PanelState& state) {
     drawRect(282.0f, 588.0f, 342.0f, 8.0f, 4.0f, rgba(1.0f, 1.0f, 1.0f, 0.13f * fade));
     drawRect(282.0f, 588.0f, 86.0f + state.navBlend * 64.0f, 8.0f, 4.0f, rgba(pageAccent(state.selected).r, pageAccent(state.selected).g, pageAccent(state.selected).b, 0.70f * fade));
     drawTextRight(888.0f, 591.0f, tr("SINGLE ELF", "单一 ELF"), 0.92f, rgba(0.72f, 0.76f, 0.86f, 0.82f), fade);
+    if (state.exitAnimationActive) {
+        renderExitFlight(exitProgress);
+    }
 }
 
 void handleInput(PanelState& state, core::window::Handle window, float deltaSeconds) {
@@ -3529,10 +3780,22 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     const core::Rect fpsRect = expandedRect(fpsTrackRect, 18.0f);
     const core::Rect languageRect = expandedRect(languageToggleRect(), 12.0f);
     const core::Rect themeRect = expandedRect(themeToggleRect(), 12.0f);
+    const core::Rect exitRect = expandedRect(systemExitButtonRect(contentX, contentW, scrollTop, scrollValue), 8.0f);
     const core::Rect demoButtonArea{contentX + 30.0f, demoY0 + 134.0f, contentW - 60.0f, 82.0f};
     const core::Rect demoSwitchHit = expandedRect(demoSwitchRect(contentX + 30.0f, demoY0 + 224.0f, contentW - 60.0f), 10.0f);
     const core::Rect demoSliderTrack = demoSliderRect(contentX + 30.0f, demoY0 + 342.0f, contentW - 60.0f);
     const core::Rect demoSliderHit = expandedRect(demoSliderTrack, 10.0f);
+
+    if (state.exitAnimationActive) {
+        state.exitAnimationTime = std::min(kExitAnimationDuration, state.exitAnimationTime + deltaSeconds);
+        state.pressedExit = false;
+        state.launchTime += deltaSeconds;
+        state.previousDown = pointer.down;
+        if (state.exitAnimationTime >= kExitAnimationDuration) {
+            gExitRequested = 1;
+        }
+        return;
+    }
 
     if (state.selected == 2) {
         state.starIdleTime += deltaSeconds;
@@ -3566,6 +3829,8 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
             if (contains(starHitRect, pointer.x, pointer.y) && pointer.y >= scrollTop - 8.0f && pointer.y <= scrollBottom + 8.0f) {
                 state.capturedStar = true;
             }
+        } else if (state.selected == 3 && pointer.y >= scrollTop && pointer.y <= scrollBottom && contains(exitRect, pointer.x, pointer.y)) {
+            state.capturedExit = true;
         }
 
         if (!hasPointerCapture(state)) {
@@ -3583,6 +3848,7 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     bool interacting = hasPointerCapture(state) && (pointer.down || pointer.releasedThisFrame);
     state.pressedLanguage = pointer.down && state.capturedLanguage && contains(languageRect, pointer.x, pointer.y);
     state.pressedTheme = pointer.down && state.capturedTheme && contains(themeRect, pointer.x, pointer.y);
+    state.pressedExit = pointer.down && state.capturedExit && contains(exitRect, pointer.x, pointer.y);
     state.pressedDemoButton = -1;
     state.pressedDemoSwitch = pointer.down && state.capturedDemoSwitch && contains(demoSwitchHit, pointer.x, pointer.y);
     state.pressedStar = pointer.down && state.capturedStar;
@@ -3602,6 +3868,13 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
 
     if (pointer.releasedThisFrame && state.capturedTheme && contains(themeRect, pointer.x, pointer.y)) {
         gNight = !gNight;
+        interacting = true;
+    }
+
+    if (pointer.releasedThisFrame && state.capturedExit && contains(exitRect, pointer.x, pointer.y)) {
+        state.exitAnimationActive = true;
+        state.exitAnimationTime = 0.0f;
+        state.pressedExit = false;
         interacting = true;
     }
 
@@ -3722,6 +3995,31 @@ int drawableHeight(core::window::Handle window) {
     return height > 0 ? height : kPanelHeight;
 }
 
+void sleepUntilFrameBudget(double frameStart, double frameEnd) {
+    const double targetFrameSeconds = 1.0 / std::max(1.0f, gTargetFps);
+    const double targetTime = frameStart + targetFrameSeconds;
+    double remainingSeconds = targetTime - frameEnd;
+    if (remainingSeconds <= 0.00045) {
+        return;
+    }
+
+    if (remainingSeconds > 0.0022) {
+        std::this_thread::sleep_for(std::chrono::duration<double>(remainingSeconds - 0.0011));
+    }
+
+    while (true) {
+        remainingSeconds = targetTime - core::window::timeSeconds();
+        if (remainingSeconds <= 0.00022) {
+            break;
+        }
+        if (remainingSeconds > 0.00070) {
+            std::this_thread::sleep_for(std::chrono::microseconds(180));
+        } else {
+            std::this_thread::yield();
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -3749,6 +4047,7 @@ int main() {
         core::window::destroyWindow(window);
         return 2;
     }
+    applyRenderThreadSchedulingHints();
 
     PanelState state;
     state.previousTime = core::window::timeSeconds();
@@ -3777,12 +4076,7 @@ int main() {
         }
         backend->present();
 
-        const double frameEnd = core::window::timeSeconds();
-        const double targetFrameSeconds = 1.0 / std::max(1.0f, gTargetFps);
-        const double remainingSeconds = targetFrameSeconds - (frameEnd - now);
-        if (remainingSeconds > 0.0005) {
-            std::this_thread::sleep_for(std::chrono::duration<double>(remainingSeconds));
-        }
+        sleepUntilFrameBudget(now, core::window::timeSeconds());
     }
 
     __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "NeoPanel Android ELF shutting down");

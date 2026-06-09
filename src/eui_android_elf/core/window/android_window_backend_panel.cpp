@@ -20,7 +20,9 @@
 #include <mutex>
 #include <poll.h>
 #include <string>
+#include <sys/prctl.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -188,7 +190,18 @@ void setPointer(AndroidWindow* window, float screenX, float screenY, bool down) 
     }
 }
 
+void tuneTouchThread() {
+#if defined(PR_SET_NAME)
+    prctl(PR_SET_NAME, "NeoPanelTouch", 0, 0, 0);
+#endif
+    if (setpriority(PRIO_PROCESS, 0, 2) != 0) {
+        __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "Touch thread nice priority unchanged: %s", std::strerror(errno));
+    }
+}
+
 void touchThreadMain(AndroidWindow* window, TouchDeviceInfo device) {
+    tuneTouchThread();
+
     int currentX = 0;
     int currentY = 0;
     bool hasX = false;
