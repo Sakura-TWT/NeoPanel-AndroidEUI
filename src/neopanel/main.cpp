@@ -286,6 +286,8 @@ struct PanelState {
     bool pressedExit = false;
     bool capturedExit = false;
     bool exitAnimationActive = false;
+    float exitAnchorX = kPanelWidth * 0.5f;
+    float exitAnchorY = kPanelHeight * 0.5f;
     bool pressedDemoSwitch = false;
     bool capturedDemoSwitch = false;
     bool capturedDemoSlider = false;
@@ -431,6 +433,16 @@ float lerpFloat(float a, float b, float t) {
     return a + (b - a) * clamp01(t);
 }
 
+float easeInCubic(float t) {
+    t = clamp01(t);
+    return t * t * t;
+}
+
+float easeInOutCubic(float t) {
+    t = clamp01(t);
+    return t < 0.5f ? 4.0f * t * t * t : 1.0f - std::pow(-2.0f * t + 2.0f, 3.0f) * 0.5f;
+}
+
 float approach(float current, float target, float deltaSeconds, float sharpness) {
     const float t = 1.0f - std::exp(-sharpness * std::max(0.0f, deltaSeconds));
     return current + (target - current) * t;
@@ -544,6 +556,11 @@ core::Color railFill() {
     return gNight ? rgba(1.0f, 1.0f, 1.0f, 0.060f) : rgba(0.10f, 0.12f, 0.18f, 0.075f);
 }
 
+core::Color withAlphaScale(core::Color color, float scale) {
+    color.a *= scale;
+    return color;
+}
+
 core::Color contentFill(float opacity) {
     return gNight ? rgba(0.10f, 0.075f, 0.105f, 0.70f * opacity)
                   : rgba(0.985f, 0.975f, 0.982f, 0.94f * opacity);
@@ -594,7 +611,7 @@ core::Rect premiumStarHitRect(float contentX, float contentW, float stageY) {
 }
 
 core::Rect systemExitButtonRect(float contentX, float contentW, float top, float scroll) {
-    return {contentX + 30.0f, top + 244.0f - scroll, contentW - 60.0f, 64.0f};
+    return {contentX + 30.0f, top + 18.0f - scroll, contentW - 60.0f, 72.0f};
 }
 
 core::Rect demoButtonRect(int index, float x, float y, float width) {
@@ -2098,10 +2115,10 @@ void drawNavIcon(int icon, float x, float y, float size, const core::Color& colo
 
 void renderAvatar(PanelState& state, float intro, float opacity) {
     drawIntroRect(46.0f, 42.0f, 170.0f, 154.0f, 38.0f,
-                  rgba(1.0f, 1.0f, 1.0f, 0.10f),
+                  rgba(1.0f, 1.0f, 1.0f, 0.10f * opacity),
                   intro,
-                  {1.4f, rgba(1.0f, 1.0f, 1.0f, 0.26f)},
-                  {true, {0.0f, 14.0f}, 34.0f, 0.0f, rgba(0.12f, 0.04f, 0.08f, 0.26f)});
+                  {1.4f, rgba(1.0f, 1.0f, 1.0f, 0.26f * opacity)},
+                  {true, {0.0f, 14.0f}, 34.0f, 0.0f, rgba(0.12f, 0.04f, 0.08f, 0.26f * opacity)});
 
     const float ix = animatedX(55.0f, intro);
     const float iy = animatedY(51.0f, intro);
@@ -2130,6 +2147,13 @@ void renderNavigation(PanelState& state, float opacity) {
         const float yPulse = pressed > 0.0f ? 2.0f : 0.0f;
         const float scale = pressed > 0.0f ? 0.985f : 1.0f + active * 0.012f;
 
+        if (active > 0.04f) {
+            drawRect(r.x - 7.0f, r.y - 6.0f + yPulse, r.width + 14.0f, r.height + 12.0f, 28.0f,
+                     rgba(accent.r, accent.g, accent.b, 0.060f * active * opacity),
+                     {},
+                     {true, {0.0f, 12.0f}, 32.0f, 0.0f, rgba(accent.r, accent.g, accent.b, 0.16f * active * opacity)});
+        }
+
         core::Transform transform;
         transform.origin = {0.5f, 0.5f};
         transform.scale = {scale, scale};
@@ -2142,7 +2166,9 @@ void renderNavigation(PanelState& state, float opacity) {
                     0.0f,
                     transform);
         if (active > 0.04f) {
-            drawRect(r.x + 9.0f, r.y + 13.0f, 5.0f, r.height - 26.0f, 2.5f, accent, {}, {}, {}, active * opacity);
+            drawRect(r.x + 9.0f, r.y + 12.0f, 5.0f, r.height - 24.0f, 2.5f, accent, {}, {}, {}, active * opacity);
+            drawRect(r.x + r.width - 11.0f, r.y + 18.0f, 3.0f, r.height - 36.0f, 1.5f, rgba(accent.r, accent.g, accent.b, 0.48f), {}, {}, {}, active * opacity);
+            drawLine(r.x + 23.0f, r.y + r.height - 12.0f, r.x + r.width - 20.0f, r.y + r.height - 12.0f, 2.0f, rgba(accent.r, accent.g, accent.b, 0.26f), active * opacity);
         }
 
         drawNavIcon(kNavItems[static_cast<std::size_t>(i)].icon, r.x + 20.0f, r.y + 16.0f, 40.0f, mix(rgba(0.58f, 0.76f, 1.0f, 1.0f), accent, active), opacity);
@@ -3520,62 +3546,78 @@ void renderMotionPage(PanelState& state, float contentX, float contentY, float c
 
 void drawSystemExitButton(const core::Rect& r, bool pressed, float opacity) {
     const core::Color accent = pageAccent(3);
-    const float press = pressed ? 2.0f : 0.0f;
+    const float press = pressed ? 2.5f : 0.0f;
     const float glow = pressed ? 1.0f : 0.0f;
 
     core::Gradient fill;
     fill.enabled = true;
-    fill.start = rgba(accent.r, accent.g, accent.b, (0.17f + glow * 0.05f) * opacity);
-    fill.end = gNight ? rgba(1.0f, 0.42f, 0.57f, (0.080f + glow * 0.030f) * opacity)
-                       : rgba(1.0f, 0.70f, 0.58f, (0.11f + glow * 0.02f) * opacity);
+    fill.start = rgba(accent.r, accent.g, accent.b, (0.24f + glow * 0.08f) * opacity);
+    fill.end = gNight ? rgba(1.0f, 0.42f, 0.57f, (0.11f + glow * 0.05f) * opacity)
+                       : rgba(1.0f, 0.70f, 0.58f, (0.15f + glow * 0.04f) * opacity);
     fill.direction = core::GradientDirection::Horizontal;
 
-    drawRect(r.x, r.y + press, r.width, r.height, 22.0f,
-             rgba(1.0f, 1.0f, 1.0f, 0.050f * opacity),
-             {1.0f, rgba(accent.r, accent.g, accent.b, (0.30f + glow * 0.22f) * opacity)},
-             {true, {0.0f, 12.0f}, 34.0f, 0.0f, rgba(accent.r, accent.g, accent.b, (0.12f + glow * 0.08f) * opacity)},
+    drawRect(r.x - 3.0f, r.y - 3.0f + press, r.width + 6.0f, r.height + 6.0f, 25.0f,
+             rgba(accent.r, accent.g, accent.b, (0.050f + glow * 0.030f) * opacity),
+             {},
+             {true, {0.0f, 16.0f}, 42.0f, 0.0f, rgba(accent.r, accent.g, accent.b, (0.20f + glow * 0.14f) * opacity)});
+    drawRect(r.x, r.y + press, r.width, r.height, 24.0f,
+             rgba(1.0f, 1.0f, 1.0f, 0.062f * opacity),
+             {1.2f, rgba(accent.r, accent.g, accent.b, (0.48f + glow * 0.24f) * opacity)},
+             {true, {0.0f, 12.0f}, 34.0f, 0.0f, rgba(accent.r, accent.g, accent.b, (0.18f + glow * 0.10f) * opacity)},
              fill,
              opacity);
 
-    drawAccentDot(r.x + 34.0f, r.y + 32.0f + press, 12.0f, rgba(accent.r, accent.g, accent.b, 0.22f), opacity);
-    drawLine(r.x + 29.0f, r.y + 32.0f + press, r.x + 39.0f, r.y + 32.0f + press, 2.5f, rgba(0.98f, 0.99f, 1.0f, 0.92f), opacity);
-    drawLine(r.x + 34.0f, r.y + 27.0f + press, r.x + 34.0f, r.y + 37.0f + press, 2.5f, rgba(0.98f, 0.99f, 1.0f, 0.92f), opacity);
+    const float iconX = r.x + 38.0f;
+    const float iconY = r.y + 36.0f + press;
+    drawAccentDot(iconX, iconY, 15.0f, rgba(accent.r, accent.g, accent.b, 0.25f), opacity);
+    drawAccentDot(iconX, iconY, 6.0f + glow * 1.8f, rgba(0.98f, 0.99f, 1.0f, 0.88f), opacity);
+    drawLine(iconX, iconY + 14.0f, iconX, iconY + 24.0f, 2.4f, rgba(accent.r, accent.g, accent.b, 0.54f), opacity);
+    drawLine(iconX - 6.0f, iconY + 18.0f, iconX, iconY + 24.0f, 2.4f, rgba(accent.r, accent.g, accent.b, 0.54f), opacity);
+    drawLine(iconX + 6.0f, iconY + 18.0f, iconX, iconY + 24.0f, 2.4f, rgba(accent.r, accent.g, accent.b, 0.54f), opacity);
 
-    drawTextFit(r.x + 58.0f, r.y + 16.0f + press, 250.0f, "EXIT PANEL", 1.02f, tileText(), opacity, 0.76f);
-    drawTextRight(r.x + r.width - 30.0f, r.y + 17.0f + press, "FLY OUT", 0.90f, rgba(accent.r, accent.g, accent.b, 0.96f), opacity);
+    drawTextFit(r.x + 66.0f, r.y + 14.0f + press, 220.0f, tr("EXIT PANEL", "退出面板"), 1.08f, tileText(), opacity, 0.82f);
+    drawTextFit(r.x + 66.0f, r.y + 42.0f + press, 230.0f, tr("FLY OUT", "优雅收起"), 0.82f, tileTextSoft(), opacity, 0.66f);
 
-    const float ax = r.x + r.width - 92.0f;
-    const float ay = r.y + 42.0f + press;
-    drawLine(ax, ay, ax + 24.0f, ay - 16.0f, 2.2f, rgba(0.94f, 0.96f, 1.0f, 0.46f), opacity);
-    drawLine(ax + 24.0f, ay - 16.0f, ax + 20.0f, ay - 5.0f, 2.2f, rgba(0.94f, 0.96f, 1.0f, 0.46f), opacity);
-    drawLine(ax + 24.0f, ay - 16.0f, ax + 12.0f, ay - 16.0f, 2.2f, rgba(0.94f, 0.96f, 1.0f, 0.46f), opacity);
+    const float ax = r.x + r.width - 100.0f;
+    const float ay = r.y + 49.0f + press;
+    drawLine(ax - 16.0f, ay + 8.0f, ax + 38.0f, ay - 28.0f, 3.0f, rgba(0.94f, 0.96f, 1.0f, 0.44f + glow * 0.14f), opacity);
+    drawLine(ax + 38.0f, ay - 28.0f, ax + 31.0f, ay - 11.0f, 3.0f, rgba(0.94f, 0.96f, 1.0f, 0.44f + glow * 0.14f), opacity);
+    drawLine(ax + 38.0f, ay - 28.0f, ax + 21.0f, ay - 27.0f, 3.0f, rgba(0.94f, 0.96f, 1.0f, 0.44f + glow * 0.14f), opacity);
+    drawAccentDot(ax + 52.0f, ay - 39.0f, 4.2f + glow * 1.4f, rgba(1.0f, 0.88f, 0.96f, 0.70f), opacity);
 }
 
 void renderSystemPage(PanelState& state, float contentX, float contentY, float contentW, float top, float bottom, float scroll, float opacity) {
     (void)contentY;
     const core::Color accent = pageAccent(3);
-    const float y0 = top + 16.0f - scroll;
-    const std::array<LocalText, 4> rows{{{"ANDROID SURFACE", "安卓表面"}, {"VULKAN BACKEND", "Vulkan 后端"}, {"STATIC STL", "静态 STL"}, {"EMBEDDED PNG", "内嵌 PNG"}}};
-    const std::array<LocalText, 4> status{{{"READY", "就绪"}, {"ACTIVE", "运行"}, {"LINKED", "已链接"}, {"IN ELF", "在 ELF 内"}}};
-    for (int i = 0; i < 4; ++i) {
-        const float y = y0 + static_cast<float>(i) * 56.0f;
-        if (!itemVisible(y, 46.0f, top, bottom)) {
-            continue;
-        }
-        drawRect(contentX + 30.0f, y, contentW - 60.0f, 46.0f, 15.0f,
-                 rgba(1.0f, 1.0f, 1.0f, 0.065f * opacity),
-                 {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.10f * opacity)});
-        drawAccentDot(contentX + 52.0f, y + 23.0f, 5.0f, accent, opacity);
-        drawTextFit(contentX + 68.0f, y + 14.0f, 330.0f, tr(rows[static_cast<std::size_t>(i)]), 1.04f, tileText(), opacity, 0.78f);
-        drawTextRight(contentX + contentW - 54.0f, y + 14.0f, tr(status[static_cast<std::size_t>(i)]), 1.02f, rgba(accent.r, accent.g, accent.b, 1.0f), opacity);
-    }
-
     const core::Rect exitRect = systemExitButtonRect(contentX, contentW, top, scroll);
     if (itemVisible(exitRect.y, exitRect.height, top, bottom)) {
         drawSystemExitButton(exitRect, state.pressedExit, opacity);
     }
 
-    const float stackY = y0 + 306.0f;
+    const float y0 = top + 112.0f - scroll;
+    const std::array<LocalText, 4> rows{{{"ANDROID SURFACE", "安卓表面"}, {"VULKAN BACKEND", "Vulkan 后端"}, {"STATIC STL", "静态 STL"}, {"EMBEDDED PNG", "内嵌 PNG"}}};
+    const std::array<LocalText, 4> status{{{"READY", "就绪"}, {"ACTIVE", "运行"}, {"LINKED", "已链接"}, {"IN ELF", "在 ELF 内"}}};
+    for (int i = 0; i < 4; ++i) {
+        const float y = y0 + static_cast<float>(i) * 60.0f;
+        if (!itemVisible(y, 50.0f, top, bottom)) {
+            continue;
+        }
+        const float rowPulse = 0.5f + 0.5f * std::sin(state.launchTime * 1.2f + static_cast<float>(i) * 0.8f);
+        drawRect(contentX + 30.0f, y, contentW - 60.0f, 50.0f, 17.0f,
+                 rgba(1.0f, 1.0f, 1.0f, (0.075f + rowPulse * 0.010f) * opacity),
+                 {1.1f, rgba(accent.r, accent.g, accent.b, (0.20f + rowPulse * 0.10f) * opacity)},
+                 {true, {0.0f, 7.0f}, 20.0f, 0.0f, rgba(accent.r, accent.g, accent.b, 0.060f * opacity)});
+        drawRect(contentX + 30.0f, y + 8.0f, 4.0f, 34.0f, 2.0f, rgba(accent.r, accent.g, accent.b, (0.62f + rowPulse * 0.18f) * opacity));
+        drawAccentDot(contentX + 55.0f, y + 25.0f, 6.2f, rgba(accent.r, accent.g, accent.b, 0.36f), opacity);
+        drawAccentDot(contentX + 55.0f, y + 25.0f, 2.8f, rgba(0.98f, 1.0f, 0.98f, 0.92f), opacity);
+        drawTextFit(contentX + 74.0f, y + 16.0f, 312.0f, tr(rows[static_cast<std::size_t>(i)]), 1.05f, tileText(), opacity, 0.80f);
+        drawRect(contentX + contentW - 150.0f, y + 12.0f, 96.0f, 26.0f, 13.0f,
+                 rgba(accent.r, accent.g, accent.b, 0.12f * opacity),
+                 {1.0f, rgba(accent.r, accent.g, accent.b, 0.30f * opacity)});
+        drawTextCenteredFit(contentX + contentW - 102.0f, y + 18.0f, 82.0f, tr(status[static_cast<std::size_t>(i)]), 0.82f, rgba(accent.r, accent.g, accent.b, 1.0f), opacity, 0.64f);
+    }
+
+    const float stackY = y0 + 270.0f;
     if (itemVisible(stackY, 172.0f, top, bottom)) {
         drawRect(contentX + 30.0f, stackY, contentW - 60.0f, 172.0f, 24.0f,
                  rgba(accent.r, accent.g, accent.b, 0.090f * opacity),
@@ -3604,7 +3646,7 @@ float pageScrollLimit(int page) {
     if (page == 2) {
         return 226.0f;
     }
-    return 122.0f;
+    return 194.0f;
 }
 
 void renderContent(PanelState& state, float opacity) {
@@ -3647,42 +3689,80 @@ void renderContent(PanelState& state, float opacity) {
     }
 }
 
-void renderExitFlight(float progress) {
+float exitPanelOpacity(float progress) {
+    const float t = clamp01(progress);
+    return (1.0f - smoothstep(0.70f, 0.98f, t)) * (1.0f - 0.12f * smoothstep(0.10f, 0.54f, t));
+}
+
+void renderExitFlight(const PanelState& state, float progress) {
     const float t = clamp01(progress);
     const core::Color accent = pageAccent(3);
-    const float gather = smoothstep(0.0f, 0.54f, t);
-    const float lift = smoothstep(0.32f, 1.0f, t);
-    const float fadeOut = 1.0f - smoothstep(0.78f, 1.0f, t);
-    const float cx = lerpFloat(kPanelWidth * 0.5f, kPanelWidth * 0.5f - 28.0f, lift) + std::sin(t * kPi) * 18.0f;
-    const float cy = lerpFloat(kPanelHeight * 0.5f, -56.0f, lift);
-    const float w = lerpFloat(kPanelWidth - 36.0f, 30.0f, gather);
-    const float h = lerpFloat(kPanelHeight - 36.0f, 30.0f, gather);
-    const float radius = lerpFloat(44.0f, 15.0f, gather);
-    const float opacity = fadeOut * (0.42f + gather * 0.58f);
+    const float gather = smoothstep(0.0f, 0.58f, t);
+    const float lift = smoothstep(0.30f, 1.0f, t);
+    const float flare = std::sin(clamp01(t) * kPi);
+    const float fadeOut = 1.0f - smoothstep(0.80f, 1.0f, t);
+    const float targetX = kPanelWidth * 0.5f + (state.exitAnchorX - kPanelWidth * 0.5f) * 0.36f;
+    const float targetY = state.exitAnchorY - 10.0f;
+    const float cx = lerpFloat(kPanelWidth * 0.5f, targetX, gather) - lift * 28.0f + std::sin(t * kPi) * 14.0f;
+    const float cy = lerpFloat(kPanelHeight * 0.5f, targetY, gather) - lift * 430.0f;
+    const float w = lerpFloat(kPanelWidth - 36.0f, 24.0f, gather);
+    const float h = lerpFloat(kPanelHeight - 36.0f, 24.0f, gather);
+    const float radius = lerpFloat(44.0f, 12.0f, gather);
+    const float opacity = fadeOut * (0.48f + gather * 0.52f);
 
     core::Gradient shell;
     shell.enabled = true;
-    shell.start = rgba(accent.r, accent.g, accent.b, (0.26f + gather * 0.18f) * opacity);
-    shell.end = rgba(1.0f, 0.52f, 0.66f, (0.14f + gather * 0.18f) * opacity);
+    shell.start = rgba(accent.r, accent.g, accent.b, (0.30f + gather * 0.28f) * opacity);
+    shell.end = rgba(1.0f, 0.52f, 0.66f, (0.18f + gather * 0.22f) * opacity);
     shell.direction = core::GradientDirection::Horizontal;
 
-    if (lift > 0.02f) {
-        const float trailOpacity = (1.0f - smoothstep(0.60f, 1.0f, t)) * lift;
-        for (int i = 0; i < 4; ++i) {
+    const float sweep = smoothstep(0.03f, 0.40f, t) * (1.0f - smoothstep(0.44f, 0.72f, t));
+    if (sweep > 0.001f) {
+        const float sx = lerpFloat(20.0f, kPanelWidth - 72.0f, smoothstep(0.02f, 0.48f, t));
+        drawLine(sx - 120.0f,
+                 kPanelHeight - 64.0f - gather * 210.0f,
+                 sx + 70.0f,
+                 kPanelHeight - 114.0f - gather * 170.0f,
+                 4.5f,
+                 rgba(1.0f, 0.92f, 0.98f, 0.28f),
+                 sweep * opacity);
+        drawLine(sx - 70.0f,
+                 kPanelHeight - 44.0f - gather * 240.0f,
+                 sx + 92.0f,
+                 kPanelHeight - 100.0f - gather * 190.0f,
+                 2.0f,
+                 rgba(accent.r, accent.g, accent.b, 0.36f),
+                 sweep * opacity);
+    }
+
+    if (lift > 0.01f) {
+        const float trailOpacity = (1.0f - smoothstep(0.64f, 1.0f, t)) * lift;
+        for (int i = 0; i < 7; ++i) {
             const float step = static_cast<float>(i);
-            const float ty = cy + 36.0f + step * (20.0f + lift * 10.0f);
-            const float tw = 42.0f + step * 18.0f;
-            drawRect(cx - tw * 0.5f + step * 5.0f,
+            const float ty = cy + 26.0f + step * (17.0f + lift * 11.0f);
+            const float tw = 38.0f + step * 15.0f;
+            drawRect(cx - tw * 0.5f + std::sin(step * 1.7f + t * 5.0f) * 8.0f,
                      ty,
                      tw,
-                     5.0f,
-                     2.5f,
-                     rgba(accent.r, accent.g, accent.b, (0.18f - step * 0.028f) * trailOpacity),
+                     4.5f,
+                     2.2f,
+                     rgba(accent.r, accent.g, accent.b, (0.19f - step * 0.018f) * trailOpacity),
                      {},
                      {},
                      {},
                      opacity);
         }
+    }
+
+    for (int i = 0; i < 18; ++i) {
+        const float seed = 200.0f + static_cast<float>(i) * 11.0f;
+        const float p = clamp01((t - hash01(seed) * 0.34f) / 0.66f);
+        const float rise = easeOutCubic(p);
+        const float side = (hash01(seed + 2.0f) - 0.5f) * (220.0f * (1.0f - gather) + 60.0f);
+        const float px = lerpFloat(kPanelWidth * 0.5f + side, cx + side * 0.10f, gather) + std::sin(seed + t * 7.0f) * 6.0f;
+        const float py = lerpFloat(kPanelHeight * 0.5f + (hash01(seed + 4.0f) - 0.5f) * 280.0f, cy + 42.0f, rise);
+        const float particleOpacity = (1.0f - smoothstep(0.64f, 1.0f, p)) * gather * fadeOut;
+        drawAccentDot(px, py, 1.8f + hash01(seed + 6.0f) * 2.6f, rgba(1.0f, 0.90f + hash01(seed + 7.0f) * 0.08f, 1.0f, 0.62f), particleOpacity * opacity);
     }
 
     drawRect(cx - w * 0.5f,
@@ -3695,12 +3775,14 @@ void renderExitFlight(float progress) {
              {true, {0.0f, 18.0f}, 48.0f, 0.0f, rgba(accent.r, accent.g, accent.b, 0.22f * opacity)},
              shell,
              opacity,
-             gather * 3.5f);
+             gather * 4.5f);
 
-    const float halo = lerpFloat(92.0f, 52.0f, gather) * fadeOut;
-    drawAccentDot(cx, cy, halo, rgba(accent.r, accent.g, accent.b, 0.026f + gather * 0.050f), opacity);
-    drawAccentDot(cx, cy, lerpFloat(18.0f, 10.0f, gather), rgba(0.98f, 0.99f, 1.0f, 0.88f), opacity);
-    drawAccentDot(cx - 4.0f, cy - 5.0f, 4.0f, rgba(1.0f, 0.82f, 0.95f, 0.82f), opacity);
+    const float halo = lerpFloat(132.0f, 48.0f, gather) * fadeOut;
+    drawAccentDot(cx, cy, halo, rgba(accent.r, accent.g, accent.b, 0.030f + gather * 0.072f + flare * 0.020f), opacity);
+    drawAccentDot(cx, cy, lerpFloat(22.0f, 9.0f, gather), rgba(0.98f, 0.99f, 1.0f, 0.90f), opacity);
+    drawAccentDot(cx - 4.0f, cy - 5.0f, 4.6f + flare * 2.0f, rgba(1.0f, 0.82f, 0.95f, 0.84f), opacity);
+    drawLine(cx - 24.0f, cy, cx + 24.0f, cy, 2.0f + flare * 1.0f, rgba(1.0f, 0.92f, 0.98f, 0.38f), opacity * gather);
+    drawLine(cx, cy - 24.0f, cx, cy + 24.0f, 2.0f + flare * 1.0f, rgba(1.0f, 0.92f, 0.98f, 0.34f), opacity * gather);
 }
 
 void renderPanel(PanelState& state) {
@@ -3710,7 +3792,7 @@ void renderPanel(PanelState& state) {
         ? std::clamp(state.exitAnimationTime / kExitAnimationDuration, 0.0f, 1.0f)
         : 0.0f;
     if (state.exitAnimationActive) {
-        fade *= 1.0f - smoothstep(0.04f, 0.48f, exitProgress);
+        fade *= exitPanelOpacity(exitProgress);
     }
     const float blur = (1.0f - clamp01(state.launchTime / 0.58f)) * 18.0f;
 
@@ -3742,7 +3824,7 @@ void renderPanel(PanelState& state) {
              rgba(1.0f, 1.0f, 1.0f, 0.030f * fade), {}, {}, glow, fade);
 
     drawRect(28.0f, 32.0f, 206.0f, 550.0f, 42.0f,
-             railFill(),
+             withAlphaScale(railFill(), fade),
              {1.0f, subtleBorder(fade)});
 
     renderAvatar(state, intro, fade);
@@ -3755,7 +3837,7 @@ void renderPanel(PanelState& state) {
     drawRect(282.0f, 588.0f, 86.0f + state.navBlend * 64.0f, 8.0f, 4.0f, rgba(pageAccent(state.selected).r, pageAccent(state.selected).g, pageAccent(state.selected).b, 0.70f * fade));
     drawTextRight(888.0f, 591.0f, tr("SINGLE ELF", "单一 ELF"), 0.92f, rgba(0.72f, 0.76f, 0.86f, 0.82f), fade);
     if (state.exitAnimationActive) {
-        renderExitFlight(exitProgress);
+        renderExitFlight(state, exitProgress);
     }
 }
 
@@ -3874,6 +3956,8 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     if (pointer.releasedThisFrame && state.capturedExit && contains(exitRect, pointer.x, pointer.y)) {
         state.exitAnimationActive = true;
         state.exitAnimationTime = 0.0f;
+        state.exitAnchorX = exitRect.x + exitRect.width * 0.5f;
+        state.exitAnchorY = exitRect.y + exitRect.height * 0.5f;
         state.pressedExit = false;
         interacting = true;
     }
