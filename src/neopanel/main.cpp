@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <csignal>
 #include <memory>
 #include <string>
 #include <thread>
@@ -44,7 +45,20 @@ constexpr float kStarRestPitch = -0.10f;
 
 bool gChinese = false;
 bool gNight = true;
-float gTargetFps = 90.0f;
+float gTargetFps = 60.0f;
+volatile std::sig_atomic_t gExitRequested = 0;
+
+void requestShutdown(int) {
+    gExitRequested = 1;
+}
+
+void installSignalHandlers() {
+    std::signal(SIGINT, requestShutdown);
+    std::signal(SIGTERM, requestShutdown);
+#if defined(SIGHUP)
+    std::signal(SIGHUP, requestShutdown);
+#endif
+}
 
 struct EmbeddedTexture {
     core::render::RenderBackend::TextureHandle handle = nullptr;
@@ -120,6 +134,7 @@ struct PanelState {
     float launchTime = 0.0f;
     double previousTime = 0.0;
     bool previousDown = false;
+    bool staticResourcesPrepared = false;
     EmbeddedTexture avatar;
     RuntimeStats stats;
     std::array<float, kGraphSamples> fpsSamples{};
@@ -702,12 +717,29 @@ int glyphIndex(char ch) {
 }
 
 struct FontGlyph {
-    core::render::RenderBackend::TextureHandle handle = nullptr;
     int width = 0;
     int height = 0;
+    int atlasX = 0;
+    int atlasY = 0;
     float xOffset = 0.0f;
     float yOffset = 0.0f;
     float advance = 0.0f;
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = 0.0f;
+    float v1 = 0.0f;
+    bool packed = false;
+};
+
+struct FontAtlas {
+    core::render::RenderBackend::TextureHandle handle = nullptr;
+    int width = 512;
+    int height = 512;
+    int cursorX = 1;
+    int cursorY = 1;
+    int rowHeight = 0;
+    bool dirty = false;
+    std::vector<unsigned char> pixels;
 };
 
 struct FontRuntime {
@@ -718,6 +750,8 @@ struct FontRuntime {
     std::size_t fontDataSize = 0;
     int fontIndex = 0;
     std::unordered_map<std::uint64_t, FontGlyph> glyphs;
+    std::unordered_map<int, FontAtlas> atlases;
+    std::unordered_map<std::string, float> widthCache;
 };
 
 FontRuntime& fontRuntime() {
@@ -725,15 +759,19 @@ FontRuntime& fontRuntime() {
     return runtime;
 }
 
+bool ensureTextureUploaded(EmbeddedTexture& texture);
+
 void destroyFontTextures(core::render::RenderBackend& backend) {
     FontRuntime& runtime = fontRuntime();
-    for (auto& entry : runtime.glyphs) {
+    for (auto& entry : runtime.atlases) {
         if (entry.second.handle != nullptr) {
             backend.destroyTexture(entry.second.handle);
             entry.second.handle = nullptr;
         }
     }
     runtime.glyphs.clear();
+    runtime.atlases.clear();
+    runtime.widthCache.clear();
 }
 
 bool tryInitFont(FontRuntime& runtime,
@@ -839,6 +877,15 @@ float fontTextWidth(const char* text, float scale) {
 
     FontRuntime& runtime = fontRuntime();
     const int pixelHeight = fontPixelHeight(scale);
+    std::string cacheKey;
+    cacheKey.reserve(std::strlen(text) + 16u);
+    cacheKey.append(std::to_string(pixelHeight));
+    cacheKey.push_back(':');
+    cacheKey.append(text);
+    if (auto it = runtime.widthCache.find(cacheKey); it != runtime.widthCache.end()) {
+        return it->second;
+    }
+
     const float fontScale = stbtt_ScaleForPixelHeight(&runtime.font, static_cast<float>(pixelHeight));
     float width = 0.0f;
     const char* p = text;
@@ -853,6 +900,10 @@ float fontTextWidth(const char* text, float scale) {
         stbtt_GetCodepointHMetrics(&runtime.font, static_cast<int>(codepoint), &advanceWidth, &leftSideBearing);
         width += std::max(static_cast<float>(pixelHeight) * 0.30f, static_cast<float>(advanceWidth) * fontScale * 0.94f);
     }
+    if (runtime.widthCache.size() > 512u) {
+        runtime.widthCache.clear();
+    }
+    runtime.widthCache.emplace(std::move(cacheKey), width);
     return width;
 }
 
@@ -950,6 +1001,57 @@ void drawTextureQuadMatrix(core::render::RenderBackend::TextureHandle handle,
         vertices[static_cast<std::size_t>(offset + 6)] = uvs[index][1];
     }
     backend->drawTexture(handle, vertices.data(), vertices.size(), tint, {x, y, width, height}, radius, kPanelWidth, kPanelHeight);
+}
+
+void drawTextureSubQuad(core::render::RenderBackend::TextureHandle handle,
+                        float x,
+                        float y,
+                        float width,
+                        float height,
+                        float u0,
+                        float v0,
+                        float u1,
+                        float v1,
+                        const core::Color& tint) {
+    if (handle == nullptr || width <= 0.0f || height <= 0.0f || tint.a <= 0.001f) {
+        return;
+    }
+    core::render::RenderBackend* backend = core::render::activeRenderBackend();
+    if (backend == nullptr) {
+        return;
+    }
+    const float positions[4][3] = {
+        {x, y, 1.0f},
+        {x + width, y, 1.0f},
+        {x + width, y + height, 1.0f},
+        {x, y + height, 1.0f},
+    };
+    const float locals[4][2] = {
+        {x, y},
+        {x + width, y},
+        {x + width, y + height},
+        {x, y + height},
+    };
+    const float uvs[4][2] = {
+        {u0, v0},
+        {u1, v0},
+        {u1, v1},
+        {u0, v1},
+    };
+    constexpr int order[6] = {0, 1, 2, 0, 2, 3};
+    std::array<float, 42> vertices{};
+    for (int i = 0; i < 6; ++i) {
+        const int index = order[i];
+        const int offset = i * 7;
+        vertices[static_cast<std::size_t>(offset + 0)] = positions[index][0];
+        vertices[static_cast<std::size_t>(offset + 1)] = positions[index][1];
+        vertices[static_cast<std::size_t>(offset + 2)] = positions[index][2];
+        vertices[static_cast<std::size_t>(offset + 3)] = locals[index][0];
+        vertices[static_cast<std::size_t>(offset + 4)] = locals[index][1];
+        vertices[static_cast<std::size_t>(offset + 5)] = uvs[index][0];
+        vertices[static_cast<std::size_t>(offset + 6)] = uvs[index][1];
+    }
+    backend->drawTexture(handle, vertices.data(), vertices.size(), tint, {x, y, width, height}, 0.0f, kPanelWidth, kPanelHeight);
 }
 
 float hash01(float value) {
@@ -1161,6 +1263,22 @@ void shadePremiumStar(StarRenderTexture& texture, float pitch, float yaw, float 
         texture.handle = backend->createTexture(texture.pixels.data(), texture.width, texture.height);
         if (texture.handle != nullptr) {
             texture.drawHoldFrames = 2;
+            texture.pixels.clear();
+            texture.pixels.shrink_to_fit();
+            texture.alpha.clear();
+            texture.alpha.shrink_to_fit();
+            texture.glow.clear();
+            texture.glow.shrink_to_fit();
+            texture.heightMap.clear();
+            texture.heightMap.shrink_to_fit();
+            texture.edge.clear();
+            texture.edge.shrink_to_fit();
+            texture.normalX.clear();
+            texture.normalX.shrink_to_fit();
+            texture.normalY.clear();
+            texture.normalY.shrink_to_fit();
+            texture.normalZ.clear();
+            texture.normalZ.shrink_to_fit();
         }
     }
     texture.shadedYaw = yaw;
@@ -1205,17 +1323,48 @@ FontGlyph* ensureFontGlyph(std::uint32_t codepoint, int pixelHeight) {
     glyph.advance = std::max(static_cast<float>(pixelHeight) * 0.30f, static_cast<float>(advanceWidth) * fontScale * 0.94f);
 
     if (bitmap != nullptr && width > 0 && height > 0) {
-        std::vector<unsigned char> rgbaPixels(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
-        for (int i = 0; i < width * height; ++i) {
-            const unsigned char alpha = bitmap[i];
-            const std::size_t offset = static_cast<std::size_t>(i) * 4u;
-            rgbaPixels[offset + 0] = 255;
-            rgbaPixels[offset + 1] = 255;
-            rgbaPixels[offset + 2] = 255;
-            rgbaPixels[offset + 3] = alpha;
+        FontAtlas& atlas = runtime.atlases[pixelHeight];
+        if (atlas.pixels.empty()) {
+            atlas.pixels.assign(static_cast<std::size_t>(atlas.width) * static_cast<std::size_t>(atlas.height) * 4u, 0u);
+            for (std::size_t i = 0; i < atlas.pixels.size(); i += 4u) {
+                atlas.pixels[i + 0u] = 255u;
+                atlas.pixels[i + 1u] = 255u;
+                atlas.pixels[i + 2u] = 255u;
+            }
         }
-        if (core::render::RenderBackend* backend = core::render::activeRenderBackend()) {
-            glyph.handle = backend->createTexture(rgbaPixels.data(), width, height);
+
+        constexpr int padding = 1;
+        if (atlas.cursorX + width + padding >= atlas.width) {
+            atlas.cursorX = padding;
+            atlas.cursorY += atlas.rowHeight + padding;
+            atlas.rowHeight = 0;
+        }
+        if (atlas.cursorY + height + padding < atlas.height) {
+            glyph.atlasX = atlas.cursorX;
+            glyph.atlasY = atlas.cursorY;
+            glyph.u0 = static_cast<float>(glyph.atlasX) / static_cast<float>(atlas.width);
+            glyph.v0 = static_cast<float>(glyph.atlasY) / static_cast<float>(atlas.height);
+            glyph.u1 = static_cast<float>(glyph.atlasX + width) / static_cast<float>(atlas.width);
+            glyph.v1 = static_cast<float>(glyph.atlasY + height) / static_cast<float>(atlas.height);
+            glyph.packed = true;
+
+            for (int row = 0; row < height; ++row) {
+                for (int col = 0; col < width; ++col) {
+                    const std::size_t src = static_cast<std::size_t>(row * width + col);
+                    const std::size_t dst = (static_cast<std::size_t>(glyph.atlasY + row) * static_cast<std::size_t>(atlas.width) +
+                                             static_cast<std::size_t>(glyph.atlasX + col)) * 4u;
+                    atlas.pixels[dst + 3u] = bitmap[src];
+                }
+            }
+            atlas.cursorX += width + padding;
+            atlas.rowHeight = std::max(atlas.rowHeight, height + padding);
+            atlas.dirty = true;
+        } else {
+            __android_log_print(ANDROID_LOG_WARN,
+                                "NeoPanel",
+                                "Font atlas full for pixel height %d; codepoint U+%04X skipped",
+                                pixelHeight,
+                                static_cast<unsigned int>(codepoint));
         }
     }
     if (bitmap != nullptr) {
@@ -1225,6 +1374,30 @@ FontGlyph* ensureFontGlyph(std::uint32_t codepoint, int pixelHeight) {
     auto [it, inserted] = runtime.glyphs.emplace(key, glyph);
     (void)inserted;
     return &it->second;
+}
+
+bool ensureFontAtlasUploaded(int pixelHeight) {
+    FontRuntime& runtime = fontRuntime();
+    auto it = runtime.atlases.find(pixelHeight);
+    if (it == runtime.atlases.end() || it->second.pixels.empty()) {
+        return false;
+    }
+
+    FontAtlas& atlas = it->second;
+    if (atlas.handle != nullptr && !atlas.dirty) {
+        return true;
+    }
+    core::render::RenderBackend* backend = core::render::activeRenderBackend();
+    if (backend == nullptr) {
+        return atlas.handle != nullptr;
+    }
+    if (atlas.handle == nullptr) {
+        atlas.handle = backend->createTexture(atlas.pixels.data(), atlas.width, atlas.height);
+        atlas.dirty = atlas.handle == nullptr;
+    } else if (atlas.dirty) {
+        atlas.dirty = !backend->updateTexture(atlas.handle, atlas.pixels.data(), atlas.width, atlas.height);
+    }
+    return atlas.handle != nullptr;
 }
 
 void drawFontText(float x, float y, const char* text, float scale, const core::Color& color, float opacity) {
@@ -1241,6 +1414,18 @@ void drawFontText(float x, float y, const char* text, float scale, const core::C
     stbtt_GetFontVMetrics(&runtime.font, &ascent, &descent, &lineGap);
     const float baseline = y + static_cast<float>(ascent) * fontScale;
 
+    const char* warm = text;
+    std::uint32_t warmCodepoint = 0;
+    while (nextCodepoint(warm, warmCodepoint)) {
+        if (warmCodepoint != ' ') {
+            ensureFontGlyph(warmCodepoint, pixelHeight);
+        }
+    }
+    if (!ensureFontAtlasUploaded(pixelHeight)) {
+        return;
+    }
+    FontAtlas& atlas = runtime.atlases[pixelHeight];
+
     float cursor = x;
     const char* p = text;
     std::uint32_t codepoint = 0;
@@ -1254,16 +1439,111 @@ void drawFontText(float x, float y, const char* text, float scale, const core::C
             cursor += static_cast<float>(pixelHeight) * 0.50f;
             continue;
         }
-        if (glyph->handle != nullptr && glyph->width > 0 && glyph->height > 0) {
-            drawTextureQuad(glyph->handle,
-                            cursor + glyph->xOffset,
-                            baseline + glyph->yOffset,
-                            static_cast<float>(glyph->width),
-                            static_cast<float>(glyph->height),
-                            rgba(color.r, color.g, color.b, color.a * opacity));
+        if (glyph->packed && atlas.handle != nullptr && glyph->width > 0 && glyph->height > 0) {
+            drawTextureSubQuad(atlas.handle,
+                               cursor + glyph->xOffset,
+                               baseline + glyph->yOffset,
+                               static_cast<float>(glyph->width),
+                               static_cast<float>(glyph->height),
+                               glyph->u0,
+                               glyph->v0,
+                               glyph->u1,
+                               glyph->v1,
+                               rgba(color.r, color.g, color.b, color.a * opacity));
         }
         cursor += glyph->advance;
     }
+}
+
+void prepareFontText(const char* text, float scale) {
+    if (text == nullptr || !ensureFontRuntime()) {
+        return;
+    }
+    const int pixelHeight = fontPixelHeight(scale);
+    const char* p = text;
+    std::uint32_t codepoint = 0;
+    while (nextCodepoint(p, codepoint)) {
+        if (codepoint != ' ') {
+            ensureFontGlyph(codepoint, pixelHeight);
+        }
+    }
+    fontTextWidth(text, scale);
+}
+
+void uploadDirtyFontAtlases() {
+    FontRuntime& runtime = fontRuntime();
+    std::vector<int> pixelHeights;
+    pixelHeights.reserve(runtime.atlases.size());
+    for (const auto& entry : runtime.atlases) {
+        if (entry.second.handle == nullptr || entry.second.dirty) {
+            pixelHeights.push_back(entry.first);
+        }
+    }
+    for (int pixelHeight : pixelHeights) {
+        ensureFontAtlasUploaded(pixelHeight);
+    }
+}
+
+void prepareStaticResources(PanelState& state) {
+    if (state.staticResourcesPrepared) {
+        return;
+    }
+
+    ensureTextureUploaded(state.avatar);
+    shadePremiumStar(state.starTexture, kStarRestPitch, kStarRestYaw, 0.0f, false);
+
+    for (const NavItem& item : kNavItems) {
+        prepareFontText(item.labelEn, 1.20f);
+        prepareFontText(item.detailEn, 0.76f);
+        prepareFontText(item.labelZh, 1.20f);
+        prepareFontText(item.detailZh, 0.76f);
+    }
+    for (const PageInfo& page : kPages) {
+        prepareFontText(page.titleEn, 1.30f);
+        prepareFontText(page.subtitleEn, 0.78f);
+        prepareFontText(page.tagEn, 0.72f);
+        prepareFontText(page.titleZh, 1.30f);
+        prepareFontText(page.subtitleZh, 0.78f);
+        prepareFontText(page.tagZh, 0.72f);
+    }
+
+    constexpr std::array<const char*, 28> hotLabels{{
+        "PREMIUM STAR",
+        "FLOAT",
+        "DEPTH",
+        "SINGLE ELF",
+        "PEARL FOLD  GLASS STAGE  MOTION FIELD",
+        "Soft bloom and depth light stay inside the stage frame.",
+        "FPS",
+        "CPU",
+        "RAM",
+        "LOAD",
+        "ANDROID SURFACE",
+        "VULKAN BACKEND",
+        "STATIC STL",
+        "EMBEDDED PNG",
+        "READY",
+        "ACTIVE",
+        "LINKED",
+        "IN ELF",
+        "DEPLOYMENT SHAPE",
+        "ROOT ELF",
+        "SURFACE",
+        "VULKAN",
+        "高级版星形深度 光泽与手势动效",
+        "动效舞台",
+        "单一 ELF",
+        "部署形态",
+        "安卓表面",
+        "运行",
+    }};
+    for (const char* text : hotLabels) {
+        prepareFontText(text, 1.04f);
+        prepareFontText(text, 0.84f);
+    }
+    uploadDirtyFontAtlases();
+
+    state.staticResourcesPrepared = true;
 }
 
 void drawText(float x, float y, const char* text, float scale, const core::Color& color, float opacity = 1.0f) {
@@ -2922,6 +3202,7 @@ int drawableHeight(core::window::Handle window) {
 
 int main() {
     __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "NeoPanel Android ELF started");
+    installSignalHandlers();
 
     core::render::initializeRenderBackendLoader();
 
@@ -2948,7 +3229,7 @@ int main() {
     PanelState state;
     state.previousTime = core::window::timeSeconds();
 
-    while (true) {
+    while (gExitRequested == 0) {
         const double now = core::window::timeSeconds();
         const float deltaSeconds = static_cast<float>(std::clamp(now - state.previousTime, 0.0, 0.050));
         state.previousTime = now;
@@ -2967,6 +3248,7 @@ int main() {
         {
             core::render::ScopedRenderBackend scoped(*backend);
             backend->clear(rgba(0.0f, 0.0f, 0.0f, 0.0f));
+            prepareStaticResources(state);
             renderPanel(state);
         }
         backend->present();
@@ -2979,6 +3261,7 @@ int main() {
         }
     }
 
+    __android_log_print(ANDROID_LOG_INFO, "NeoPanel", "NeoPanel Android ELF shutting down");
     destroyFontTextures(*backend);
     if (state.avatar.handle != nullptr) {
         backend->destroyTexture(state.avatar.handle);
@@ -2988,8 +3271,8 @@ int main() {
         backend->destroyTexture(state.starTexture.handle);
         state.starTexture.handle = nullptr;
     }
-    core::releaseInputQueue(window);
     backend.reset();
     core::window::destroyWindow(window);
+    core::releaseInputQueue(window);
     return 0;
 }

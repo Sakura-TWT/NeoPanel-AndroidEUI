@@ -1042,6 +1042,7 @@ void VulkanRenderBackend::releasePendingUploads() {
     if (device_ == VK_NULL_HANDLE) {
         uploadArena_.pendingBuffers.clear();
         uploadArena_.pendingMemories.clear();
+        uploadArena_.used = 0;
         return;
     }
     for (VkBuffer buffer : uploadArena_.pendingBuffers) {
@@ -1057,7 +1058,6 @@ void VulkanRenderBackend::releasePendingUploads() {
     uploadArena_.pendingBuffers.clear();
     uploadArena_.pendingMemories.clear();
     uploadArena_.used = 0;
-    destroyUploadBuffer();
 }
 
 void VulkanRenderBackend::transitionSwapchainImage(VkImageLayout newLayout) {

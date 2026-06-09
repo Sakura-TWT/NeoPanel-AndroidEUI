@@ -12,6 +12,7 @@
 #include <GLFW/glfw3.h>
 #endif
 
+#include <mutex>
 #include <unordered_map>
 #include <utility>
 
@@ -64,6 +65,11 @@ inline std::unordered_map<window::Handle, bool>& composingStates() {
     return states;
 }
 
+inline std::mutex& inputMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
 inline InputQueue& inputQueue(window::Handle window) {
     return inputQueues()[window];
 }
@@ -105,22 +111,26 @@ inline void appendUtf8(std::string& output, unsigned int codepoint) {
 } // namespace detail
 
 inline void queueTextInput(window::Handle window, const std::string& text) {
+    std::lock_guard<std::mutex> lock(detail::inputMutex());
     detail::InputQueue& queue = detail::inputQueue(window);
     queue.text += text;
     detail::setComposing(window, false);
 }
 
 inline void queueTextEditing(window::Handle window, const std::string& text) {
+    std::lock_guard<std::mutex> lock(detail::inputMutex());
     detail::setComposing(window, !text.empty());
 }
 
 inline void queueScrollInput(window::Handle window, double x, double y) {
+    std::lock_guard<std::mutex> lock(detail::inputMutex());
     detail::InputQueue& queue = detail::inputQueue(window);
     queue.scrollX += x;
     queue.scrollY += y;
 }
 
 inline void queueKeyInput(window::Handle window, InputKey key, bool ctrl = false, bool shift = false) {
+    std::lock_guard<std::mutex> lock(detail::inputMutex());
     detail::InputQueue& queue = detail::inputQueue(window);
     queue.shift = shift;
     if (ctrl && key == InputKey::V) {
@@ -218,6 +228,7 @@ inline void installInputCallbacks(window::Handle window) {
 }
 
 inline std::pair<KeyboardEvent, ScrollEvent> consumeInputEvents(window::Handle window) {
+    std::lock_guard<std::mutex> lock(detail::inputMutex());
     detail::InputQueue& queue = detail::inputQueue(window);
     KeyboardEvent keyboard;
     keyboard.text = std::move(queue.text);
@@ -246,6 +257,7 @@ inline std::pair<KeyboardEvent, ScrollEvent> consumeInputEvents(window::Handle w
 }
 
 inline void releaseInputQueue(window::Handle window) {
+    std::lock_guard<std::mutex> lock(detail::inputMutex());
     detail::inputQueues().erase(window);
     detail::pointerStates().erase(window);
     detail::composingStates().erase(window);

@@ -116,6 +116,10 @@ adb shell su -c "/data/local/tmp/neopanel/deploy_example.sh"
 
 程序从 `/dev/input/event*` 读取触摸事件。没有 root 权限时，窗口可能能创建，但触摸通常不可用。
 
+退出程序时可以发送 `Ctrl+C` 或 `SIGTERM`。NeoPanel 会进入清理路径，停止触摸输入线程，释放输入队列、Vulkan 纹理和 Android Surface。若执行环境直接 `SIGKILL`/强杀进程，系统仍会回收进程资源，但应用自身的日志化清理路径不会执行。
+
+默认目标帧率为 60 FPS，以降低持续 CPU/GPU 压力；FRAME 页面仍可临时调到 30-120 FPS 做性能观察。
+
 ## 常见问题
 
 找不到 EUI-NEO：

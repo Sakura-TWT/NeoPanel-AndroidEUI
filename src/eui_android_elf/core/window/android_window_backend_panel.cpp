@@ -14,9 +14,11 @@
 #include <cmath>
 #include <cstring>
 #include <dirent.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <mutex>
+#include <poll.h>
 #include <string>
 #include <sys/ioctl.h>
 #include <thread>
@@ -103,7 +105,7 @@ std::vector<TouchDeviceInfo> discoverTouchDevices(int screenWidth, int screenHei
         }
 
         std::string path = std::string("/dev/input/") + entry->d_name;
-        int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
         if (fd < 0) {
             continue;
         }
@@ -195,8 +197,25 @@ void touchThreadMain(AndroidWindow* window, TouchDeviceInfo device) {
 
     input_event events[64]{};
     while (window != nullptr && window->running.load()) {
+        pollfd pollInfo{};
+        pollInfo.fd = device.fd;
+        pollInfo.events = POLLIN;
+        const int pollResult = poll(&pollInfo, 1, 50);
+        if (pollResult < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (pollResult == 0 || (pollInfo.revents & POLLIN) == 0) {
+            continue;
+        }
+
         const ssize_t bytes = read(device.fd, events, sizeof(events));
         if (bytes <= 0 || bytes % static_cast<ssize_t>(sizeof(input_event)) != 0) {
+            if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+                continue;
+            }
             continue;
         }
 
@@ -259,7 +278,7 @@ void stopTouch(AndroidWindow* window) {
     window->running.store(false);
     for (std::thread& thread : window->touchThreads) {
         if (thread.joinable()) {
-            thread.detach();
+            thread.join();
         }
     }
     window->touchThreads.clear();
