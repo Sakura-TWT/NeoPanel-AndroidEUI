@@ -46,14 +46,14 @@ constexpr int kStarOutlinePointCount = 64;
 constexpr int kStarFacetPointCount = 10;
 constexpr int kStarVolumeLayerCount = 7;
 constexpr int kStarVolumeStride = 2;
-constexpr int kStarMeshSegmentCount = 72;
-constexpr int kStarMeshRingCount = 6;
-constexpr int kStarMeshBackRingCount = 5;
-constexpr int kStarMeshSideBandCount = 5;
+constexpr int kStarMeshSegmentCount = 40;
+constexpr int kStarMeshRingCount = 4;
+constexpr int kStarMeshBackRingCount = 3;
+constexpr int kStarMeshSideBandCount = 3;
 constexpr float kStarEntrySpinDuration = 1.42f;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
-constexpr float kExitAnimationDuration = 0.96f;
+constexpr float kExitAnimationDuration = 1.08f;
 
 bool gChinese = false;
 bool gNight = true;
@@ -627,8 +627,14 @@ core::Rect demoSliderRect(float x, float y, float width) {
     return {x, y + 64.0f, width, 42.0f};
 }
 
+bool hasGlobalRenderTransform();
+
 void setRenderScissor(bool enabled, const core::Rect& rect) {
     if (core::render::RenderBackend* backend = core::render::activeRenderBackend()) {
+        if (enabled && hasGlobalRenderTransform()) {
+            backend->setScissor(true, {0.0f, 0.0f, static_cast<float>(kPanelWidth), static_cast<float>(kPanelHeight)}, kPanelHeight);
+            return;
+        }
         backend->setScissor(enabled, rect, kPanelHeight);
     }
 }
@@ -648,6 +654,72 @@ float animatedW(float width, float progress) {
 float animatedH(float height, float progress) {
     return height * progress;
 }
+
+core::TransformMatrix matrixForTransform(const core::Rect& frame, const core::Transform& transform);
+
+struct RenderTransformScope {
+    bool active = false;
+    core::TransformMatrix matrix{};
+};
+
+RenderTransformScope& renderTransformScope() {
+    static thread_local RenderTransformScope scope;
+    return scope;
+}
+
+bool hasGlobalRenderTransform() {
+    return renderTransformScope().active;
+}
+
+const core::TransformMatrix& globalRenderTransform() {
+    return renderTransformScope().matrix;
+}
+
+core::TransformMatrix multiplyMatrix(const core::TransformMatrix& outer, const core::TransformMatrix& inner) {
+    return {
+        outer.m00 * inner.m00 + outer.m01 * inner.m10 + outer.tx * inner.px,
+        outer.m00 * inner.m01 + outer.m01 * inner.m11 + outer.tx * inner.py,
+        outer.m00 * inner.tx + outer.m01 * inner.ty + outer.tx * inner.pw,
+        outer.m10 * inner.m00 + outer.m11 * inner.m10 + outer.ty * inner.px,
+        outer.m10 * inner.m01 + outer.m11 * inner.m11 + outer.ty * inner.py,
+        outer.m10 * inner.tx + outer.m11 * inner.ty + outer.ty * inner.pw,
+        outer.px * inner.m00 + outer.py * inner.m10 + outer.pw * inner.px,
+        outer.px * inner.m01 + outer.py * inner.m11 + outer.pw * inner.py,
+        outer.px * inner.tx + outer.py * inner.ty + outer.pw * inner.pw
+    };
+}
+
+core::TransformMatrix scopedMatrixForRect(const core::Rect& frame, const core::Transform& transform) {
+    const core::TransformMatrix local = matrixForTransform(frame, transform);
+    return hasGlobalRenderTransform() ? multiplyMatrix(globalRenderTransform(), local) : local;
+}
+
+core::Vec2 scopedPoint(float x, float y) {
+    return hasGlobalRenderTransform() ? core::transformPoint(globalRenderTransform(), x, y) : core::Vec2{x, y};
+}
+
+struct ScopedGlobalRenderTransform {
+    explicit ScopedGlobalRenderTransform(const core::TransformMatrix& matrix) {
+        RenderTransformScope& scope = renderTransformScope();
+        previousActive_ = scope.active;
+        previousMatrix_ = scope.matrix;
+        scope.matrix = previousActive_ ? multiplyMatrix(previousMatrix_, matrix) : matrix;
+        scope.active = true;
+    }
+
+    ~ScopedGlobalRenderTransform() {
+        RenderTransformScope& scope = renderTransformScope();
+        scope.active = previousActive_;
+        scope.matrix = previousMatrix_;
+    }
+
+    ScopedGlobalRenderTransform(const ScopedGlobalRenderTransform&) = delete;
+    ScopedGlobalRenderTransform& operator=(const ScopedGlobalRenderTransform&) = delete;
+
+private:
+    bool previousActive_ = false;
+    core::TransformMatrix previousMatrix_{};
+};
 
 void drawRectRaw(float x,
                  float y,
@@ -675,7 +747,11 @@ void drawRectRaw(float x,
     primitive.setShadow(shadow);
     primitive.setOpacity(opacity);
     primitive.setBlur(blur);
-    primitive.setTransform(transform);
+    if (hasGlobalRenderTransform()) {
+        primitive.setTransformMatrix(scopedMatrixForRect({x, y, width, height}, transform));
+    } else {
+        primitive.setTransform(transform);
+    }
     primitive.render(kPanelWidth, kPanelHeight);
 }
 
@@ -768,7 +844,7 @@ void drawRectMatrix(float x,
     primitive.setShadow(shadow);
     primitive.setOpacity(opacity);
     primitive.setBlur(blur);
-    primitive.setTransformMatrix(matrix);
+    primitive.setTransformMatrix(hasGlobalRenderTransform() ? multiplyMatrix(globalRenderTransform(), matrix) : matrix);
     primitive.render(kPanelWidth, kPanelHeight);
 }
 
@@ -872,6 +948,9 @@ void drawPolygonAbs(const core::Vec2* points, std::size_t count, const core::Col
     primitive.setPoints(relative);
     primitive.setColor(color);
     primitive.setOpacity(opacity);
+    if (hasGlobalRenderTransform()) {
+        primitive.setTransformMatrix(globalRenderTransform());
+    }
     primitive.render(kPanelWidth, kPanelHeight);
 }
 
@@ -1153,9 +1232,12 @@ void drawTextureQuad(core::render::RenderBackend::TextureHandle handle,
     for (int i = 0; i < 6; ++i) {
         const int index = order[i];
         const int offset = i * 7;
-        vertices[static_cast<std::size_t>(offset + 0)] = positions[index][0];
-        vertices[static_cast<std::size_t>(offset + 1)] = positions[index][1];
-        vertices[static_cast<std::size_t>(offset + 2)] = positions[index][2];
+        const core::Vec3 projected = hasGlobalRenderTransform()
+            ? core::transformPointWithW(globalRenderTransform(), positions[index][0], positions[index][1])
+            : core::Vec3{positions[index][0], positions[index][1], positions[index][2]};
+        vertices[static_cast<std::size_t>(offset + 0)] = projected.x;
+        vertices[static_cast<std::size_t>(offset + 1)] = projected.y;
+        vertices[static_cast<std::size_t>(offset + 2)] = projected.z;
         vertices[static_cast<std::size_t>(offset + 3)] = locals[index][0];
         vertices[static_cast<std::size_t>(offset + 4)] = locals[index][1];
         vertices[static_cast<std::size_t>(offset + 5)] = uvs[index][0];
@@ -1196,7 +1278,10 @@ void drawTextureQuadMatrix(core::render::RenderBackend::TextureHandle handle,
     for (int i = 0; i < 6; ++i) {
         const int index = order[i];
         const int offset = i * 7;
-        const core::Vec3 projected = core::transformPointWithW(matrix, localPositions[index][0], localPositions[index][1]);
+        core::Vec3 projected = core::transformPointWithW(matrix, localPositions[index][0], localPositions[index][1]);
+        if (hasGlobalRenderTransform()) {
+            projected = core::transformPointWithW(globalRenderTransform(), projected.x, projected.y);
+        }
         vertices[static_cast<std::size_t>(offset + 0)] = projected.x;
         vertices[static_cast<std::size_t>(offset + 1)] = projected.y;
         vertices[static_cast<std::size_t>(offset + 2)] = projected.z;
@@ -1248,9 +1333,12 @@ void drawTextureSubQuad(core::render::RenderBackend::TextureHandle handle,
     for (int i = 0; i < 6; ++i) {
         const int index = order[i];
         const int offset = i * 7;
-        vertices[static_cast<std::size_t>(offset + 0)] = positions[index][0];
-        vertices[static_cast<std::size_t>(offset + 1)] = positions[index][1];
-        vertices[static_cast<std::size_t>(offset + 2)] = positions[index][2];
+        const core::Vec3 projected = hasGlobalRenderTransform()
+            ? core::transformPointWithW(globalRenderTransform(), positions[index][0], positions[index][1])
+            : core::Vec3{positions[index][0], positions[index][1], positions[index][2]};
+        vertices[static_cast<std::size_t>(offset + 0)] = projected.x;
+        vertices[static_cast<std::size_t>(offset + 1)] = projected.y;
+        vertices[static_cast<std::size_t>(offset + 2)] = projected.z;
         vertices[static_cast<std::size_t>(offset + 3)] = locals[index][0];
         vertices[static_cast<std::size_t>(offset + 4)] = locals[index][1];
         vertices[static_cast<std::size_t>(offset + 5)] = uvs[index][0];
@@ -1937,9 +2025,12 @@ void rebuildImageVertices(float x,
     for (int i = 0; i < 6; ++i) {
         const int index = order[i];
         const int offset = i * 7;
-        vertices[static_cast<std::size_t>(offset + 0)] = positions[index][0];
-        vertices[static_cast<std::size_t>(offset + 1)] = positions[index][1];
-        vertices[static_cast<std::size_t>(offset + 2)] = positions[index][2];
+        const core::Vec3 projected = hasGlobalRenderTransform()
+            ? core::transformPointWithW(globalRenderTransform(), positions[index][0], positions[index][1])
+            : core::Vec3{positions[index][0], positions[index][1], positions[index][2]};
+        vertices[static_cast<std::size_t>(offset + 0)] = projected.x;
+        vertices[static_cast<std::size_t>(offset + 1)] = projected.y;
+        vertices[static_cast<std::size_t>(offset + 2)] = projected.z;
         vertices[static_cast<std::size_t>(offset + 3)] = locals[index][0];
         vertices[static_cast<std::size_t>(offset + 4)] = locals[index][1];
         vertices[static_cast<std::size_t>(offset + 5)] = uvs[index][0];
@@ -3048,7 +3139,7 @@ void drawPremiumStarMeshModel(const core::Rect& visual,
             const auto& d = back[static_cast<std::size_t>(ring)][static_cast<std::size_t>(next)];
             pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::Back, pressed, phase, opacity * 0.98f);
             pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::Back, pressed, phase, opacity * 0.98f);
-            if (ring < kStarMeshBackRingCount - 1) {
+            if (ring == 0) {
                 pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::BackGlow, pressed, phase + 0.8f, opacity * 0.16f);
                 pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::BackGlow, pressed, phase + 0.8f, opacity * 0.16f);
             }
@@ -3100,7 +3191,7 @@ void drawPremiumStarMeshModel(const core::Rect& visual,
             const auto& d = front[static_cast<std::size_t>(ring)][static_cast<std::size_t>(next)];
             pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::Front, pressed, phase, opacity);
             pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::Front, pressed, phase, opacity);
-            if (ring < kStarMeshRingCount - 2) {
+            if (ring == 0 || ring == 1) {
                 const float glowOpacity = opacity * (0.12f + (1.0f - static_cast<float>(ring) / static_cast<float>(kStarMeshRingCount)) * 0.12f);
                 pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::FrontGlow, pressed, phase + 1.6f, glowOpacity);
                 pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::FrontGlow, pressed, phase + 1.6f, glowOpacity);
@@ -3119,8 +3210,8 @@ void drawPremiumStarMeshModel(const core::Rect& visual,
 
     const auto& rim = front[kStarMeshRingCount];
     const auto& backRim = back[kStarMeshBackRingCount];
-    for (int i = 0; i < kStarMeshSegmentCount; i += 2) {
-        const int next = (i + 2) % kStarMeshSegmentCount;
+    for (int i = 0; i < kStarMeshSegmentCount; i += 4) {
+        const int next = (i + 4) % kStarMeshSegmentCount;
         const float angle = -kPi * 0.5f + (static_cast<float>(i) + 1.0f) / static_cast<float>(kStarMeshSegmentCount) * kPi * 2.0f;
         const float glint = std::clamp(0.32f + std::cos(angle - rotationY) * 0.38f + std::sin(phase + angle * 2.0f) * 0.12f,
                                        0.0f,
@@ -3145,7 +3236,7 @@ void drawPremiumStarMeshModel(const core::Rect& visual,
     }
 
     const auto& center = front[0][0];
-    for (int i = 0; i < kStarMeshSegmentCount; i += 8) {
+    for (int i = 0; i < kStarMeshSegmentCount; i += 10) {
         const auto& p = front[kStarMeshRingCount][static_cast<std::size_t>(i)];
         const float spoke = 0.5f + 0.5f * std::sin(phase + static_cast<float>(i) * 0.37f);
         drawLine(center.screen.x,
@@ -3452,6 +3543,7 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     const float entryLift = state.starEntrySpinTime > 0.0f ? std::sin(entryProgress * kPi) : 0.0f;
     const float driftYaw = state.starYaw + std::sin(spinAngle) * 0.018f;
     const float driftPitch = state.starPitch + std::cos(spinAngle * 0.7f) * 0.012f - entryLift * 0.050f;
+    const bool highRefreshMode = gTargetFps >= 75.0f;
 
     core::Gradient stageGradient;
     stageGradient.enabled = true;
@@ -3470,7 +3562,8 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
 
     drawCenteredStarGlow(visual, driftYaw, driftPitch, pressed, pulse, opacity);
 
-    for (int i = 0; i < 28; ++i) {
+    const int particleCount = highRefreshMode ? 14 : 20;
+    for (int i = 0; i < particleCount; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
         const float depth = 0.35f + hash01(seed + 11.0f) * 0.95f;
         const float px = stage.x + 34.0f + hash01(seed) * (stage.width - 68.0f);
@@ -3487,7 +3580,8 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
                                 rgba(0.96f, 0.90f + hash01(seed + 7.0f) * 0.08f, 1.0f, 0.86f),
                                 op);
     }
-    for (int i = 0; i < 10; ++i) {
+    const int streakCount = highRefreshMode ? 4 : 6;
+    for (int i = 0; i < streakCount; ++i) {
         const float seed = 100.0f + static_cast<float>(i) * 13.0f;
         const float depth = 0.45f + hash01(seed + 6.0f) * 0.80f;
         const float x = stage.x + 56.0f + hash01(seed) * (stage.width - 112.0f) + driftYaw * (7.0f + depth * 15.0f);
@@ -3509,12 +3603,14 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
                     visual.y + visual.height * (0.31f + driftPitch * 0.06f),
                     13.5f + pressed * 2.0f,
                     rgba(1.0f, 0.95f, 1.0f, 0.90f),
-                    0.30f * opacity);
-    drawStarSparkle(visual.x + visual.width * 0.35f + driftYaw * 12.0f,
-                    visual.y + visual.height * 0.27f + driftPitch * 10.0f,
-                    10.5f + pulse * 2.4f,
-                    rgba(1.0f, 1.0f, 1.0f, 0.82f),
-                    0.28f * opacity);
+                    (highRefreshMode ? 0.22f : 0.30f) * opacity);
+    if (!highRefreshMode) {
+        drawStarSparkle(visual.x + visual.width * 0.35f + driftYaw * 12.0f,
+                        visual.y + visual.height * 0.27f + driftPitch * 10.0f,
+                        10.5f + pulse * 2.4f,
+                        rgba(1.0f, 1.0f, 1.0f, 0.82f),
+                        0.28f * opacity);
+    }
     drawTextFit(stage.x + 26.0f, stage.y + 20.0f, 190.0f, "PREMIUM STAR", 1.04f, tileText(), opacity, 0.78f);
     drawTextRight(stage.x + stage.width - 26.0f,
                   stage.y + 20.0f,
@@ -3691,7 +3787,29 @@ void renderContent(PanelState& state, float opacity) {
 
 float exitPanelOpacity(float progress) {
     const float t = clamp01(progress);
-    return (1.0f - smoothstep(0.70f, 0.98f, t)) * (1.0f - 0.12f * smoothstep(0.10f, 0.54f, t));
+    return 1.0f - smoothstep(0.82f, 1.0f, t);
+}
+
+core::TransformMatrix exitPanelMatrix(const PanelState& state, float progress) {
+    const float t = clamp01(progress);
+    const float gather = smoothstep(0.02f, 0.64f, t);
+    const float lift = smoothstep(0.34f, 1.0f, t);
+    const float targetX = kPanelWidth * 0.5f + (state.exitAnchorX - kPanelWidth * 0.5f) * 0.45f;
+    const float targetY = state.exitAnchorY - 10.0f;
+    const float cx = lerpFloat(kPanelWidth * 0.5f, targetX, gather) - lift * 40.0f + std::sin(t * kPi) * 18.0f;
+    const float cy = lerpFloat(kPanelHeight * 0.5f, targetY, gather) - lift * 470.0f;
+
+    core::Transform transform;
+    transform.origin = {0.5f, 0.5f};
+    transform.scale = {
+        lerpFloat(1.0f, 0.060f, gather),
+        lerpFloat(1.0f, 0.070f, gather)
+    };
+    transform.rotate = -0.12f * smoothstep(0.16f, 0.78f, t);
+    transform.translate = {cx - kPanelWidth * 0.5f, cy - kPanelHeight * 0.5f};
+    transform.perspective = 1600.0f;
+    transform.rotateX = -0.10f * smoothstep(0.20f, 0.72f, t);
+    return matrixForTransform({0.0f, 0.0f, static_cast<float>(kPanelWidth), static_cast<float>(kPanelHeight)}, transform);
 }
 
 void renderExitFlight(const PanelState& state, float progress) {
@@ -3795,6 +3913,10 @@ void renderPanel(PanelState& state) {
         fade *= exitPanelOpacity(exitProgress);
     }
     const float blur = (1.0f - clamp01(state.launchTime / 0.58f)) * 18.0f;
+    std::unique_ptr<ScopedGlobalRenderTransform> exitTransform;
+    if (state.exitAnimationActive) {
+        exitTransform = std::make_unique<ScopedGlobalRenderTransform>(exitPanelMatrix(state, exitProgress));
+    }
 
     core::Gradient shellGradient;
     shellGradient.enabled = true;
@@ -3836,6 +3958,7 @@ void renderPanel(PanelState& state) {
     drawRect(282.0f, 588.0f, 342.0f, 8.0f, 4.0f, rgba(1.0f, 1.0f, 1.0f, 0.13f * fade));
     drawRect(282.0f, 588.0f, 86.0f + state.navBlend * 64.0f, 8.0f, 4.0f, rgba(pageAccent(state.selected).r, pageAccent(state.selected).g, pageAccent(state.selected).b, 0.70f * fade));
     drawTextRight(888.0f, 591.0f, tr("SINGLE ELF", "单一 ELF"), 0.92f, rgba(0.72f, 0.76f, 0.86f, 0.82f), fade);
+    exitTransform.reset();
     if (state.exitAnimationActive) {
         renderExitFlight(state, exitProgress);
     }
