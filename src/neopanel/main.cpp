@@ -40,6 +40,13 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr int kStarTextureSize = 288;
 constexpr int kStarOutlinePointCount = 64;
 constexpr int kStarFacetPointCount = 10;
+constexpr int kStarVolumeLayerCount = 7;
+constexpr int kStarVolumeStride = 2;
+constexpr int kStarMeshSegmentCount = 72;
+constexpr int kStarMeshRingCount = 6;
+constexpr int kStarMeshBackRingCount = 5;
+constexpr int kStarMeshSideBandCount = 5;
+constexpr float kStarEntrySpinDuration = 1.42f;
 constexpr float kStarRestYaw = -0.12f;
 constexpr float kStarRestPitch = -0.10f;
 
@@ -101,6 +108,35 @@ struct RuntimeStats {
     int frameCount = 0;
 };
 
+struct StarMeshVertex {
+    core::Vec3 position{};
+    core::Vec3 normal{};
+};
+
+struct StarProjectedVertex {
+    core::Vec2 screen{};
+    core::Vec3 world{};
+    core::Vec3 normal{};
+    float depth = 0.0f;
+};
+
+struct StarMeshTriangle {
+    StarProjectedVertex a{};
+    StarProjectedVertex b{};
+    StarProjectedVertex c{};
+    core::Color color{};
+    float opacity = 1.0f;
+    float sortDepth = 0.0f;
+};
+
+enum class StarMeshMaterial {
+    Front,
+    FrontGlow,
+    Side,
+    Back,
+    BackGlow
+};
+
 struct PanelState {
     int selected = 0;
     int pressedNav = -1;
@@ -128,6 +164,9 @@ struct PanelState {
     float starYawVelocity = 0.0f;
     float starPitchVelocity = 0.0f;
     float starPressAmount = 0.0f;
+    bool starStageSeen = false;
+    float starEntrySpinTime = 0.0f;
+    float starIdleTime = 0.0f;
     float navBlend = 0.0f;
     float contentScroll = 0.0f;
     float targetScroll = 0.0f;
@@ -655,7 +694,8 @@ void drawPolygonAbs(const core::Vec2* points, std::size_t count, const core::Col
         return;
     }
 
-    std::vector<core::Vec2> relative;
+    static thread_local std::vector<core::Vec2> relative;
+    relative.clear();
     relative.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
         relative.push_back({points[i].x - minX, points[i].y - minY});
@@ -1069,6 +1109,18 @@ core::Vec3 normalize3(core::Vec3 value) {
 
 float dot3(const core::Vec3& a, const core::Vec3& b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+core::Vec3 cross3(const core::Vec3& a, const core::Vec3& b) {
+    return {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+core::Vec3 add3(const core::Vec3& a, const core::Vec3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
 core::Vec3 rotateNormal(float x, float y, float z, float pitch, float yaw) {
@@ -1490,7 +1542,6 @@ void prepareStaticResources(PanelState& state) {
     }
 
     ensureTextureUploaded(state.avatar);
-    shadePremiumStar(state.starTexture, kStarRestPitch, kStarRestYaw, 0.0f, false);
 
     for (const NavItem& item : kNavItems) {
         prepareFontText(item.labelEn, 1.20f);
@@ -2517,18 +2568,30 @@ void drawCenteredStarGlow(const core::Rect& visual,
                      opacity);
 }
 
-core::Transform starSurfaceTransform(float yaw, float pitch, float pressed, float depth) {
+float starRotationY(float yaw, float spinAngle) {
+    return spinAngle + yaw * 0.92f;
+}
+
+core::Transform starSurfaceTransform(float yaw, float pitch, float pressed, float depth, float spinAngle = 0.0f) {
     const float depthT = clamp01(depth);
+    const float depthCurve = smoothstep(0.0f, 1.0f, depthT);
+    const float rotationY = starRotationY(yaw, spinAngle);
+    const float sideAmount = std::fabs(std::sin(rotationY));
+    const float normalShift = std::sin(rotationY) * depthCurve * (58.0f + sideAmount * 36.0f);
     core::Transform transform;
     transform.origin = {0.5f, 0.5f};
-    transform.rotate = yaw * 0.050f;
-    transform.rotateX = pitch * 0.76f;
-    transform.rotateY = yaw * 0.84f;
-    transform.translate = {yaw * (15.0f - depthT * 48.0f),
-                           pitch * (9.0f + depthT * 34.0f) - pressed * (3.6f - depthT * 1.4f)};
-    transform.translateZ = 70.0f + pressed * 18.0f - depthT * 106.0f;
-    transform.perspective = 570.0f;
-    const float scale = 1.022f + pressed * 0.024f - depthT * 0.018f;
+    transform.rotate = yaw * 0.032f + std::sin(spinAngle) * 0.020f;
+    transform.rotateX = pitch * 0.78f + std::sin(spinAngle * 0.5f) * 0.030f;
+    transform.rotateY = rotationY;
+    transform.translate = {
+        yaw * (14.0f - depthCurve * 18.0f) - normalShift,
+        pitch * (8.0f + depthCurve * 22.0f) - pressed * (3.6f - depthCurve * 1.4f) +
+            std::sin(spinAngle * 0.75f) * depthCurve * 3.0f
+    };
+    transform.translateZ = 84.0f + pressed * 18.0f - depthCurve * (122.0f + sideAmount * 34.0f);
+    transform.perspective = 500.0f;
+    const float bevel = std::sin(depthCurve * kPi) * (0.010f + sideAmount * 0.010f);
+    const float scale = 1.030f + pressed * 0.024f - depthCurve * (0.050f + sideAmount * 0.022f) + bevel;
     transform.scale = {scale, scale};
     return transform;
 }
@@ -2538,20 +2601,24 @@ core::Vec2 projectPoint(const core::TransformMatrix& matrix, const core::Vec2& p
     return {p.x, p.y};
 }
 
-std::array<core::Vec2, kStarOutlinePointCount> starOutlinePoints(const core::Rect& visual) {
+std::array<core::Vec2, kStarOutlinePointCount> starOutlinePoints(const core::Rect& visual, float radiusScale) {
     std::array<core::Vec2, kStarOutlinePointCount> points{};
     const float centerX = visual.x + visual.width * 0.5f;
     const float centerY = visual.y + visual.height * 0.5f;
     for (int i = 0; i < kStarOutlinePointCount; ++i) {
         const float t = static_cast<float>(i) / static_cast<float>(kStarOutlinePointCount);
         const float angle = -kPi * 0.5f + t * kPi * 2.0f;
-        const float radius = premiumStarRadius(angle) * 0.985f;
+        const float radius = premiumStarRadius(angle) * radiusScale;
         points[static_cast<std::size_t>(i)] = {
             centerX + std::cos(angle) * radius * visual.width * 0.5f,
             centerY + std::sin(angle) * radius * visual.height * 0.5f
         };
     }
     return points;
+}
+
+std::array<core::Vec2, kStarOutlinePointCount> starOutlinePoints(const core::Rect& visual) {
+    return starOutlinePoints(visual, 0.985f);
 }
 
 std::array<core::Vec2, kStarFacetPointCount> starFacetPoints(const core::Rect& visual) {
@@ -2589,93 +2656,516 @@ std::array<core::Vec2, kStarFacetPointCount> projectStarFacets(
     return projected;
 }
 
-void drawStarBackVolume(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
+float telegramStarRadiusUnit(float angle) {
+    return premiumStarRadius(angle) / 0.86f;
+}
+
+float starMeshSurfaceZ(float ring, float angle, bool front) {
+    const float radial = clamp01(ring);
+    const float wave = std::pow(std::max(0.0f, 0.5f + 0.5f * std::cos(5.0f * (angle + kPi * 0.5f))), 1.8f);
+    const float dome = std::pow(std::max(0.0f, 1.0f - radial * 0.92f), 1.75f);
+    const float ridge = (0.45f + wave * 0.55f) * std::pow(std::max(0.0f, 1.0f - radial), 0.80f);
+    const float sign = front ? 1.0f : -1.0f;
+    const float base = front ? 0.018f : 0.014f;
+    return sign * (base + dome * (front ? 0.108f : 0.026f) + ridge * (front ? 0.036f : 0.010f));
+}
+
+StarMeshVertex makeStarMeshVertex(float ring, float angle, bool front) {
+    const float radius = telegramStarRadiusUnit(angle) * ring;
+    const float x = std::cos(angle) * radius;
+    const float y = std::sin(angle) * radius;
+    const float z = starMeshSurfaceZ(ring, angle, front);
+    const float sign = front ? 1.0f : -1.0f;
+    const float slope = (1.0f - ring) * (front ? 0.62f : 0.28f);
+    const core::Vec3 normal = normalize3({x * slope, y * slope, sign * (1.08f - ring * 0.18f)});
+    return {{x, y, z}, normal};
+}
+
+core::Vec3 rotateStarMeshPoint(const core::Vec3& p, float pitch, float yaw, float roll) {
+    const float cosY = std::cos(yaw);
+    const float sinY = std::sin(yaw);
+    const float cosX = std::cos(pitch);
+    const float sinX = std::sin(pitch);
+    const float cosZ = std::cos(roll);
+    const float sinZ = std::sin(roll);
+
+    const float yx = p.x * cosY + p.z * sinY;
+    const float yz = -p.x * sinY + p.z * cosY;
+    const float xy = p.y * cosX - yz * sinX;
+    const float xz = p.y * sinX + yz * cosX;
+    return {
+        yx * cosZ - xy * sinZ,
+        yx * sinZ + xy * cosZ,
+        xz
+    };
+}
+
+StarProjectedVertex projectStarMeshVertex(const StarMeshVertex& vertex,
+                                          const core::Rect& visual,
+                                          float pitch,
+                                          float yaw,
+                                          float roll,
+                                          float pressed,
+                                          float floatPhase) {
+    const core::Vec3 rotated = rotateStarMeshPoint(vertex.position, pitch, yaw, roll);
+    const core::Vec3 normal = normalize3(rotateStarMeshPoint(vertex.normal, pitch, yaw, roll));
+    const float scale = visual.width * (0.53f + pressed * 0.010f);
+    const float perspective = 3.15f;
+    const float cameraZ = perspective - rotated.z;
+    const float perspectiveScale = perspective / std::max(0.35f, cameraZ);
+    const float centerX = visual.x + visual.width * 0.5f + std::sin(floatPhase) * 2.0f;
+    const float centerY = visual.y + visual.height * 0.5f - pressed * 2.2f + std::cos(floatPhase * 0.76f) * 1.4f;
+    return {
+        {centerX + rotated.x * scale * perspectiveScale,
+         centerY + rotated.y * scale * perspectiveScale},
+        rotated,
+        normal,
+        rotated.z
+    };
+}
+
+core::Color shadeStarMeshTriangle(const StarProjectedVertex& a,
+                                  const StarProjectedVertex& b,
+                                  const StarProjectedVertex& c,
+                                  StarMeshMaterial material,
+                                  float pressed,
+                                  float phase) {
+    const core::Vec3 faceNormal = normalize3(cross3({b.world.x - a.world.x, b.world.y - a.world.y, b.world.z - a.world.z},
+                                                    {c.world.x - a.world.x, c.world.y - a.world.y, c.world.z - a.world.z}));
+    const core::Vec3 avgNormal = normalize3(add3(add3(a.normal, b.normal), c.normal));
+    const core::Vec3 normal = normalize3(add3({faceNormal.x * 0.45f, faceNormal.y * 0.45f, faceNormal.z * 0.45f},
+                                              {avgNormal.x * 0.55f, avgNormal.y * 0.55f, avgNormal.z * 0.55f}));
+    const core::Vec3 lightKey = normalize3({-0.55f, -0.72f, 1.25f});
+    const core::Vec3 lightCool = normalize3({0.80f, -0.18f, 0.58f});
+    const core::Vec3 lightWarm = normalize3({-0.80f, 0.42f, 0.72f});
+    const core::Vec3 view = {0.0f, 0.0f, 1.0f};
+    const core::Vec3 halfVector = normalize3(add3(lightKey, view));
+    const float diffuse = std::max(0.0f, dot3(normal, lightKey));
+    const float cool = std::max(0.0f, dot3(normal, lightCool));
+    const float warm = std::max(0.0f, dot3(normal, lightWarm));
+    const float spec = std::pow(std::max(0.0f, dot3(normal, halfVector)), 26.0f);
+    const float rim = std::pow(std::max(0.0f, 1.0f - std::fabs(dot3(normal, view))), 1.55f);
+    const float fresnel = std::pow(std::max(0.0f, 1.0f - std::max(0.0f, dot3(normal, view))), 2.2f);
+    const float shimmer = 0.5f + 0.5f * std::sin((a.world.x + b.world.x + c.world.x) * 4.2f -
+                                                 (a.world.y + b.world.y + c.world.y) * 3.1f + phase);
+    const float pearlWave = 0.5f + 0.5f * std::sin((a.world.x + b.world.x + c.world.x) * 7.4f +
+                                                   (a.world.z + b.world.z + c.world.z) * 18.0f -
+                                                   phase * 1.35f);
+
+    core::Color base = rgba(0.88f, 0.84f, 0.99f, 1.0f);
+    core::Color pearl = rgba(1.0f, 0.965f, 1.0f, 1.0f);
+    if (material == StarMeshMaterial::FrontGlow) {
+        base = rgba(0.94f, 0.90f, 1.0f, 1.0f);
+        pearl = rgba(1.0f, 0.985f, 1.0f, 1.0f);
+    } else if (material == StarMeshMaterial::Side) {
+        base = rgba(0.84f, 0.78f, 0.98f, 1.0f);
+        pearl = rgba(0.985f, 0.955f, 1.0f, 1.0f);
+    } else if (material == StarMeshMaterial::Back || material == StarMeshMaterial::BackGlow) {
+        base = rgba(0.86f, 0.80f, 0.98f, 1.0f);
+        pearl = rgba(0.99f, 0.955f, 1.0f, 1.0f);
+    }
+
+    const float materialBoost = material == StarMeshMaterial::FrontGlow ? 0.30f :
+                                material == StarMeshMaterial::Back ? 0.16f :
+                                material == StarMeshMaterial::BackGlow ? 0.26f : 0.0f;
+    const float pearlMix = std::clamp(0.38f + diffuse * 0.38f + spec * 0.35f + rim * 0.24f + materialBoost,
+                                      0.0f,
+                                      1.0f);
+    core::Color color = mix(base, pearl, pearlMix);
+    const float backSheen = material == StarMeshMaterial::Back || material == StarMeshMaterial::BackGlow
+        ? std::pow(std::max(0.0f, 1.0f - std::sqrt((a.world.x + b.world.x + c.world.x) * (a.world.x + b.world.x + c.world.x) * 0.035f +
+                                                   (a.world.y + b.world.y + c.world.y) * (a.world.y + b.world.y + c.world.y) * 0.035f)),
+                   1.6f)
+        : 0.0f;
+    const float frontGlow = material == StarMeshMaterial::FrontGlow ? 0.11f + pearlWave * 0.055f : 0.0f;
+    const float sideFresnel = material == StarMeshMaterial::Side ? fresnel * 0.18f : 0.0f;
+    color.r = std::clamp(color.r + warm * 0.050f + spec * 0.16f + shimmer * 0.018f + pearlWave * 0.014f +
+                             backSheen * 0.055f + sideFresnel + frontGlow + pressed * 0.018f,
+                         0.0f,
+                         1.0f);
+    color.g = std::clamp(color.g + diffuse * 0.040f + spec * 0.13f + shimmer * 0.014f + pearlWave * 0.012f +
+                             backSheen * 0.045f + sideFresnel * 0.82f + frontGlow * 0.92f + pressed * 0.012f,
+                         0.0f,
+                         1.0f);
+    color.b = std::clamp(color.b + cool * 0.060f + rim * 0.070f + shimmer * 0.026f + pearlWave * 0.020f +
+                             backSheen * 0.050f + sideFresnel * 0.94f + frontGlow + pressed * 0.016f,
+                         0.0f,
+                         1.0f);
+    color.a = 1.0f;
+    return color;
+}
+
+void pushStarMeshTriangle(std::vector<StarMeshTriangle>& triangles,
+                          const StarProjectedVertex& a,
+                          const StarProjectedVertex& b,
+                          const StarProjectedVertex& c,
+                          StarMeshMaterial material,
+                          float pressed,
+                          float phase,
+                          float opacity) {
+    const float area = (b.screen.x - a.screen.x) * (c.screen.y - a.screen.y) -
+                       (b.screen.y - a.screen.y) * (c.screen.x - a.screen.x);
+    if (std::fabs(area) < 0.005f) {
+        return;
+    }
+    const core::Vec3 faceNormal = normalize3(cross3({b.world.x - a.world.x, b.world.y - a.world.y, b.world.z - a.world.z},
+                                                    {c.world.x - a.world.x, c.world.y - a.world.y, c.world.z - a.world.z}));
+    if (material == StarMeshMaterial::Front && faceNormal.z < -0.045f) {
+        return;
+    }
+    StarMeshTriangle tri;
+    tri.a = a;
+    tri.b = b;
+    tri.c = c;
+    tri.color = shadeStarMeshTriangle(a, b, c, material, pressed, phase);
+    const float materialOpacity = material == StarMeshMaterial::Front ? 1.0f :
+                                  material == StarMeshMaterial::FrontGlow ? 0.46f :
+                                  material == StarMeshMaterial::Side ? 1.0f :
+                                  material == StarMeshMaterial::BackGlow ? 0.58f : 0.980f;
+    tri.opacity = opacity * materialOpacity;
+    tri.sortDepth = (a.depth + b.depth + c.depth) / 3.0f;
+    triangles.push_back(tri);
+}
+
+void drawPremiumStarMeshModel(const core::Rect& visual,
+                              float yaw,
+                              float pitch,
+                              float pressed,
+                              float opacity,
+                              float spinAngle,
+                              float timeSeconds) {
+    if (opacity <= 0.001f) {
+        return;
+    }
+
+    const float rotationY = spinAngle + yaw * 0.96f;
+    const float rotationX = pitch * 0.70f + std::sin(timeSeconds * 0.62f) * 0.020f;
+    const float roll = yaw * 0.020f + std::sin(timeSeconds * 0.44f) * 0.016f;
+    const float phase = timeSeconds * 1.24f + spinAngle * 0.60f;
+    static thread_local std::vector<StarMeshTriangle> triangles;
+    triangles.clear();
+    triangles.reserve(2200);
+
+    std::array<std::array<StarProjectedVertex, kStarMeshSegmentCount>, kStarMeshRingCount + 1> front{};
+    std::array<std::array<StarProjectedVertex, kStarMeshSegmentCount>, kStarMeshBackRingCount + 1> back{};
+    for (int ring = 0; ring <= kStarMeshRingCount; ++ring) {
+        const float r = static_cast<float>(ring) / static_cast<float>(kStarMeshRingCount);
+        for (int i = 0; i < kStarMeshSegmentCount; ++i) {
+            const float angle = -kPi * 0.5f + static_cast<float>(i) / static_cast<float>(kStarMeshSegmentCount) * kPi * 2.0f;
+            front[static_cast<std::size_t>(ring)][static_cast<std::size_t>(i)] =
+                projectStarMeshVertex(makeStarMeshVertex(r, angle, true), visual, rotationX, rotationY, roll, pressed, phase);
+        }
+    }
+    for (int ring = 0; ring <= kStarMeshBackRingCount; ++ring) {
+        const float r = static_cast<float>(ring) / static_cast<float>(kStarMeshBackRingCount);
+        for (int i = 0; i < kStarMeshSegmentCount; ++i) {
+            const float angle = -kPi * 0.5f + static_cast<float>(i) / static_cast<float>(kStarMeshSegmentCount) * kPi * 2.0f;
+            back[static_cast<std::size_t>(ring)][static_cast<std::size_t>(i)] =
+                projectStarMeshVertex(makeStarMeshVertex(r, angle, false), visual, rotationX, rotationY, roll, pressed, phase);
+        }
+    }
+
+    for (int ring = 0; ring < kStarMeshBackRingCount; ++ring) {
+        for (int i = 0; i < kStarMeshSegmentCount; ++i) {
+            const int next = (i + 1) % kStarMeshSegmentCount;
+            const auto& a = back[static_cast<std::size_t>(ring)][static_cast<std::size_t>(i)];
+            const auto& b = back[static_cast<std::size_t>(ring + 1)][static_cast<std::size_t>(i)];
+            const auto& c = back[static_cast<std::size_t>(ring + 1)][static_cast<std::size_t>(next)];
+            const auto& d = back[static_cast<std::size_t>(ring)][static_cast<std::size_t>(next)];
+            pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::Back, pressed, phase, opacity * 0.98f);
+            pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::Back, pressed, phase, opacity * 0.98f);
+            if (ring < kStarMeshBackRingCount - 1) {
+                pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::BackGlow, pressed, phase + 0.8f, opacity * 0.16f);
+                pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::BackGlow, pressed, phase + 0.8f, opacity * 0.16f);
+            }
+        }
+    }
+
+    for (int i = 0; i < kStarMeshSegmentCount; ++i) {
+        const int next = (i + 1) % kStarMeshSegmentCount;
+        const float angleA = -kPi * 0.5f + static_cast<float>(i) / static_cast<float>(kStarMeshSegmentCount) * kPi * 2.0f;
+        const float angleB = -kPi * 0.5f + static_cast<float>(next) / static_cast<float>(kStarMeshSegmentCount) * kPi * 2.0f;
+        for (int band = 0; band < kStarMeshSideBandCount; ++band) {
+            const float t0 = static_cast<float>(band) / static_cast<float>(kStarMeshSideBandCount);
+            const float t1 = static_cast<float>(band + 1) / static_cast<float>(kStarMeshSideBandCount);
+            const float bevel0 = smoothstep(0.0f, 1.0f, t0);
+            const float bevel1 = smoothstep(0.0f, 1.0f, t1);
+            StarMeshVertex va = makeStarMeshVertex(1.0f - std::sin(t0 * kPi) * 0.016f, angleA, true);
+            StarMeshVertex vb = makeStarMeshVertex(1.0f - std::sin(t0 * kPi) * 0.016f, angleB, true);
+            StarMeshVertex vc = makeStarMeshVertex(1.0f - std::sin(t1 * kPi) * 0.016f, angleB, true);
+            StarMeshVertex vd = makeStarMeshVertex(1.0f - std::sin(t1 * kPi) * 0.016f, angleA, true);
+            const float za0 = starMeshSurfaceZ(1.0f, angleA, true) * (1.0f - bevel0) + starMeshSurfaceZ(1.0f, angleA, false) * bevel0;
+            const float zb0 = starMeshSurfaceZ(1.0f, angleB, true) * (1.0f - bevel0) + starMeshSurfaceZ(1.0f, angleB, false) * bevel0;
+            const float zc1 = starMeshSurfaceZ(1.0f, angleB, true) * (1.0f - bevel1) + starMeshSurfaceZ(1.0f, angleB, false) * bevel1;
+            const float zd1 = starMeshSurfaceZ(1.0f, angleA, true) * (1.0f - bevel1) + starMeshSurfaceZ(1.0f, angleA, false) * bevel1;
+            va.position.z = za0;
+            vb.position.z = zb0;
+            vc.position.z = zc1;
+            vd.position.z = zd1;
+            const core::Vec3 edgeNormalA = normalize3({std::cos(angleA) * 0.78f, std::sin(angleA) * 0.78f, 0.18f - t0 * 0.36f});
+            const core::Vec3 edgeNormalB = normalize3({std::cos(angleB) * 0.78f, std::sin(angleB) * 0.78f, 0.18f - t0 * 0.36f});
+            va.normal = edgeNormalA;
+            vb.normal = edgeNormalB;
+            vc.normal = normalize3({std::cos(angleB) * 0.78f, std::sin(angleB) * 0.78f, 0.18f - t1 * 0.36f});
+            vd.normal = normalize3({std::cos(angleA) * 0.78f, std::sin(angleA) * 0.78f, 0.18f - t1 * 0.36f});
+            const StarProjectedVertex a = projectStarMeshVertex(va, visual, rotationX, rotationY, roll, pressed, phase);
+            const StarProjectedVertex b = projectStarMeshVertex(vb, visual, rotationX, rotationY, roll, pressed, phase);
+            const StarProjectedVertex c = projectStarMeshVertex(vc, visual, rotationX, rotationY, roll, pressed, phase);
+            const StarProjectedVertex d = projectStarMeshVertex(vd, visual, rotationX, rotationY, roll, pressed, phase);
+            pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::Side, pressed, phase, opacity);
+            pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::Side, pressed, phase, opacity);
+        }
+    }
+
+    for (int ring = 0; ring < kStarMeshRingCount; ++ring) {
+        for (int i = 0; i < kStarMeshSegmentCount; ++i) {
+            const int next = (i + 1) % kStarMeshSegmentCount;
+            const auto& a = front[static_cast<std::size_t>(ring)][static_cast<std::size_t>(i)];
+            const auto& b = front[static_cast<std::size_t>(ring + 1)][static_cast<std::size_t>(i)];
+            const auto& c = front[static_cast<std::size_t>(ring + 1)][static_cast<std::size_t>(next)];
+            const auto& d = front[static_cast<std::size_t>(ring)][static_cast<std::size_t>(next)];
+            pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::Front, pressed, phase, opacity);
+            pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::Front, pressed, phase, opacity);
+            if (ring < kStarMeshRingCount - 2) {
+                const float glowOpacity = opacity * (0.12f + (1.0f - static_cast<float>(ring) / static_cast<float>(kStarMeshRingCount)) * 0.12f);
+                pushStarMeshTriangle(triangles, a, b, c, StarMeshMaterial::FrontGlow, pressed, phase + 1.6f, glowOpacity);
+                pushStarMeshTriangle(triangles, a, c, d, StarMeshMaterial::FrontGlow, pressed, phase + 1.6f, glowOpacity);
+            }
+        }
+    }
+
+    std::sort(triangles.begin(), triangles.end(), [](const StarMeshTriangle& a, const StarMeshTriangle& b) {
+        return a.sortDepth < b.sortDepth;
+    });
+
+    for (const StarMeshTriangle& tri : triangles) {
+        const std::array<core::Vec2, 3> points{{tri.a.screen, tri.b.screen, tri.c.screen}};
+        drawPolygonAbs(points, tri.color, tri.opacity);
+    }
+
+    const auto& rim = front[kStarMeshRingCount];
+    const auto& backRim = back[kStarMeshBackRingCount];
+    for (int i = 0; i < kStarMeshSegmentCount; i += 2) {
+        const int next = (i + 2) % kStarMeshSegmentCount;
+        const float angle = -kPi * 0.5f + (static_cast<float>(i) + 1.0f) / static_cast<float>(kStarMeshSegmentCount) * kPi * 2.0f;
+        const float glint = std::clamp(0.32f + std::cos(angle - rotationY) * 0.38f + std::sin(phase + angle * 2.0f) * 0.12f,
+                                       0.0f,
+                                       1.0f);
+        drawLine(rim[static_cast<std::size_t>(i)].screen.x,
+                 rim[static_cast<std::size_t>(i)].screen.y,
+                 rim[static_cast<std::size_t>(next)].screen.x,
+                 rim[static_cast<std::size_t>(next)].screen.y,
+                 0.85f + glint * 1.15f,
+                 rgba(1.0f, 0.96f, 1.0f, 0.72f),
+                 (0.020f + glint * 0.085f + pressed * 0.018f) * opacity);
+        const float backGlint = std::clamp(0.26f - std::cos(angle - rotationY) * 0.30f + std::sin(phase * 0.7f + angle) * 0.08f,
+                                           0.0f,
+                                           1.0f);
+        drawLine(backRim[static_cast<std::size_t>(i)].screen.x,
+                 backRim[static_cast<std::size_t>(i)].screen.y,
+                 backRim[static_cast<std::size_t>(next)].screen.x,
+                 backRim[static_cast<std::size_t>(next)].screen.y,
+                 0.70f + backGlint * 0.90f,
+                 rgba(0.98f, 0.92f, 1.0f, 0.62f),
+                 (0.018f + backGlint * 0.066f + pressed * 0.012f) * opacity);
+    }
+
+    const auto& center = front[0][0];
+    for (int i = 0; i < kStarMeshSegmentCount; i += 8) {
+        const auto& p = front[kStarMeshRingCount][static_cast<std::size_t>(i)];
+        const float spoke = 0.5f + 0.5f * std::sin(phase + static_cast<float>(i) * 0.37f);
+        drawLine(center.screen.x,
+                 center.screen.y,
+                 p.screen.x,
+                 p.screen.y,
+                 0.70f + spoke * 0.45f,
+                 rgba(1.0f, 0.94f, 1.0f, 0.50f),
+                 (0.005f + spoke * 0.014f) * opacity);
+    }
+
+    const core::Vec2 flash = front[2][static_cast<std::size_t>(kStarMeshSegmentCount / 10)].screen;
+    drawStarSparkle(flash.x, flash.y, 8.0f + pressed * 1.4f, rgba(1.0f, 0.97f, 1.0f, 0.88f), 0.20f * opacity);
+}
+
+void drawStarVolumeBackCap(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity, float spinAngle) {
     if (opacity <= 0.001f) {
         return;
     }
 
     const auto facets = starFacetPoints(visual);
-    const core::TransformMatrix backMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 1.0f));
+    const core::TransformMatrix backMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 1.0f, spinAngle));
     const auto back = projectStarFacets(facets, backMatrix);
     const core::Vec2 center = projectPoint(backMatrix, {visual.x + visual.width * 0.5f, visual.y + visual.height * 0.5f});
-    const float tilt = std::clamp(std::sqrt(yaw * yaw + pitch * pitch) / 0.60f, 0.0f, 1.0f);
+    const float rotationY = starRotationY(yaw, spinAngle);
+    const float sideAmount = std::fabs(std::sin(rotationY));
 
     for (int i = 0; i < kStarFacetPointCount; ++i) {
         const int next = (i + 1) % kStarFacetPointCount;
         const float angle = -kPi * 0.5f + (static_cast<float>(i) + 0.5f) * (kPi / 5.0f);
-        const float facing = std::clamp(0.45f + (-yaw * std::cos(angle) + pitch * std::sin(angle)) * 0.55f, 0.0f, 1.0f);
-        const core::Color backColor = mix(rgba(0.34f, 0.22f, 0.54f, 1.0f),
-                                          rgba(0.74f, 0.58f, 0.90f, 1.0f),
-                                          facing);
+        const float facing = std::clamp(0.50f + (-std::sin(rotationY) * std::cos(angle) + pitch * std::sin(angle) * 0.50f) * 0.58f,
+                                        0.0f,
+                                        1.0f);
+        const core::Color backColor = mix(rgba(0.48f, 0.40f, 0.72f, 1.0f),
+                                          rgba(0.90f, 0.82f, 1.0f, 1.0f),
+                                          std::pow(facing, 0.92f));
         const std::array<core::Vec2, 3> tri{{
             center,
             back[static_cast<std::size_t>(i)],
             back[static_cast<std::size_t>(next)]
         }};
-        drawPolygonAbs(tri, rgba(backColor.r, backColor.g, backColor.b, 0.030f + facing * 0.045f + tilt * 0.020f + pressed * 0.012f), opacity);
+        drawPolygonAbs(tri,
+                       rgba(backColor.r,
+                            backColor.g,
+                            backColor.b,
+                            0.018f + sideAmount * 0.030f + facing * 0.036f + pressed * 0.012f),
+                       opacity);
     }
 }
 
-void drawStarExtrudedSides(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
+void drawStarSolidVolume(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity, float spinAngle) {
     if (opacity <= 0.001f) {
         return;
     }
 
-    const auto outline = starOutlinePoints(visual);
-    const core::TransformMatrix frontMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f));
-    const core::TransformMatrix backMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 1.0f));
-    const auto front = projectStarOutline(outline, frontMatrix);
-    const auto back = projectStarOutline(outline, backMatrix);
-    const float tilt = std::clamp(std::sqrt(yaw * yaw + pitch * pitch) / 0.58f, 0.0f, 1.0f);
+    const float rotationY = starRotationY(yaw, spinAngle);
+    const float sideAmount = std::fabs(std::sin(rotationY));
+    const auto outline = starOutlinePoints(visual, 0.998f);
+    std::array<std::array<core::Vec2, kStarOutlinePointCount>, kStarVolumeLayerCount> shell{};
 
-    for (int i = 0; i < kStarOutlinePointCount; ++i) {
-        const int next = (i + 1) % kStarOutlinePointCount;
-        const float t = (static_cast<float>(i) + 0.5f) / static_cast<float>(kStarOutlinePointCount);
+    for (int layer = 0; layer < kStarVolumeLayerCount; ++layer) {
+        const float depth = static_cast<float>(layer) / static_cast<float>(kStarVolumeLayerCount - 1);
+        const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, depth, spinAngle));
+        shell[static_cast<std::size_t>(layer)] = projectStarOutline(outline, matrix);
+    }
+
+    drawStarVolumeBackCap(visual, yaw, pitch, pressed, opacity, spinAngle);
+
+    for (int layer = kStarVolumeLayerCount - 2; layer >= 0; --layer) {
+        const auto& frontLayer = shell[static_cast<std::size_t>(layer)];
+        const auto& backLayer = shell[static_cast<std::size_t>(layer + 1)];
+        const float depthMid = (static_cast<float>(layer) + 0.5f) / static_cast<float>(kStarVolumeLayerCount - 1);
+        const float depthLight = 1.0f - depthMid * 0.30f;
+
+        for (int i = 0; i < kStarOutlinePointCount; i += kStarVolumeStride) {
+            const int next = (i + kStarVolumeStride) % kStarOutlinePointCount;
+            const float t = (static_cast<float>(i) + static_cast<float>(kStarVolumeStride) * 0.5f) /
+                            static_cast<float>(kStarOutlinePointCount);
+            const float angle = -kPi * 0.5f + t * kPi * 2.0f;
+            const float nx = std::cos(angle);
+            const float ny = std::sin(angle);
+            const float facing = std::clamp(0.46f + (-std::sin(rotationY) * nx + pitch * ny * 0.55f) * 0.90f,
+                                            0.0f,
+                                            1.0f);
+            const float highlight = std::pow(std::clamp(0.34f + facing * 0.42f + sideAmount * 0.44f - depthMid * 0.18f,
+                                                        0.0f,
+                                                        1.0f),
+                                             1.20f);
+            const core::Color shadow = rgba(0.48f, 0.40f, 0.72f, 1.0f);
+            const core::Color mid = rgba(0.78f, 0.68f, 0.98f, 1.0f);
+            const core::Color pearl = rgba(1.0f, 0.97f, 1.0f, 1.0f);
+            const core::Color sideColor = mix(mix(shadow, mid, facing), pearl, highlight);
+            const float alpha = (0.020f + sideAmount * 0.062f + facing * 0.070f + highlight * 0.050f + pressed * 0.018f) *
+                                depthLight;
+            const std::array<core::Vec2, 4> quad{{
+                backLayer[static_cast<std::size_t>(i)],
+                backLayer[static_cast<std::size_t>(next)],
+                frontLayer[static_cast<std::size_t>(next)],
+                frontLayer[static_cast<std::size_t>(i)]
+            }};
+            drawPolygonAbs(quad, rgba(sideColor.r, sideColor.g, sideColor.b, alpha), opacity);
+        }
+    }
+
+    const auto innerOutline = starOutlinePoints(visual, 0.54f);
+    const core::TransformMatrix innerFrontMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.18f, spinAngle));
+    const core::TransformMatrix innerBackMatrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.86f, spinAngle));
+    const auto innerFront = projectStarOutline(innerOutline, innerFrontMatrix);
+    const auto innerBack = projectStarOutline(innerOutline, innerBackMatrix);
+    const float spineAlpha = sideAmount * (0.060f + pressed * 0.018f);
+
+    for (int i = 0; i < kStarOutlinePointCount; i += 4) {
+        const int next = (i + 4) % kStarOutlinePointCount;
+        const float t = (static_cast<float>(i) + 2.0f) / static_cast<float>(kStarOutlinePointCount);
         const float angle = -kPi * 0.5f + t * kPi * 2.0f;
-        const float nx = std::cos(angle);
-        const float ny = std::sin(angle);
-        const float facing = std::clamp(0.50f + (-yaw * nx + pitch * ny) * 1.10f, 0.0f, 1.0f);
-        const float alpha = 0.060f + facing * 0.22f + tilt * 0.070f + pressed * 0.034f;
-        const core::Color sideColor = mix(rgba(0.38f, 0.26f, 0.63f, 1.0f),
-                                          rgba(0.96f, 0.82f, 1.0f, 1.0f),
-                                          std::pow(facing, 0.82f));
+        const float facing = std::clamp(0.48f + (-std::sin(rotationY) * std::cos(angle) + pitch * std::sin(angle) * 0.45f) * 0.84f,
+                                        0.0f,
+                                        1.0f);
+        const core::Color ridgeColor = mix(rgba(0.70f, 0.58f, 0.94f, 1.0f),
+                                           rgba(1.0f, 0.96f, 1.0f, 1.0f),
+                                           std::pow(facing, 0.90f));
         const std::array<core::Vec2, 4> quad{{
-            back[static_cast<std::size_t>(i)],
-            back[static_cast<std::size_t>(next)],
-            front[static_cast<std::size_t>(next)],
-            front[static_cast<std::size_t>(i)]
+            innerBack[static_cast<std::size_t>(i)],
+            innerBack[static_cast<std::size_t>(next)],
+            innerFront[static_cast<std::size_t>(next)],
+            innerFront[static_cast<std::size_t>(i)]
         }};
-        drawPolygonAbs(quad, rgba(sideColor.r, sideColor.g, sideColor.b, alpha), opacity);
+        drawPolygonAbs(quad, rgba(ridgeColor.r, ridgeColor.g, ridgeColor.b, 0.010f + spineAlpha + facing * 0.034f), opacity);
+    }
 
-        if (facing > 0.52f || (i % 7) == 0) {
-            const float rimAlpha = (0.055f + facing * 0.18f + pressed * 0.032f) * opacity;
-            drawLine(front[static_cast<std::size_t>(i)].x,
-                     front[static_cast<std::size_t>(i)].y,
-                     front[static_cast<std::size_t>(next)].x,
-                     front[static_cast<std::size_t>(next)].y,
-                     0.85f + facing * 1.05f,
-                     rgba(1.0f, 0.92f, 1.0f, 0.72f),
-                     rimAlpha);
+    const core::Vec2 centerFront = projectPoint(innerFrontMatrix, {visual.x + visual.width * 0.5f, visual.y + visual.height * 0.5f});
+    const core::Vec2 centerBack = projectPoint(innerBackMatrix, {visual.x + visual.width * 0.5f, visual.y + visual.height * 0.5f});
+    drawLine(centerBack.x,
+             centerBack.y,
+             centerFront.x,
+             centerFront.y,
+             8.0f + sideAmount * 6.0f + pressed * 1.5f,
+             rgba(1.0f, 0.95f, 1.0f, 0.30f),
+             sideAmount * 0.40f * opacity);
+    drawLine(centerBack.x,
+             centerBack.y,
+             centerFront.x,
+             centerFront.y,
+             2.2f + sideAmount * 2.0f,
+             rgba(0.72f, 0.58f, 0.96f, 0.44f),
+             sideAmount * 0.28f * opacity);
+
+    const auto& frontRim = shell[0];
+    const auto& backRim = shell[kStarVolumeLayerCount - 1];
+    for (int i = 0; i < kStarOutlinePointCount; i += kStarVolumeStride) {
+        const int next = (i + kStarVolumeStride) % kStarOutlinePointCount;
+        const float t = (static_cast<float>(i) + static_cast<float>(kStarVolumeStride) * 0.5f) /
+                        static_cast<float>(kStarOutlinePointCount);
+        const float angle = -kPi * 0.5f + t * kPi * 2.0f;
+        const float facing = std::clamp(0.42f + (-std::sin(rotationY) * std::cos(angle) + pitch * std::sin(angle) * 0.46f) * 0.90f,
+                                        0.0f,
+                                        1.0f);
+        const float frontAlpha = (0.022f + facing * 0.072f + sideAmount * 0.036f + pressed * 0.016f) * opacity;
+        drawLine(frontRim[static_cast<std::size_t>(i)].x,
+                 frontRim[static_cast<std::size_t>(i)].y,
+                 frontRim[static_cast<std::size_t>(next)].x,
+                 frontRim[static_cast<std::size_t>(next)].y,
+                 0.90f + facing * 0.95f,
+                 rgba(1.0f, 0.95f, 1.0f, 0.82f),
+                 frontAlpha);
+        if (sideAmount > 0.24f) {
+            drawLine(backRim[static_cast<std::size_t>(i)].x,
+                     backRim[static_cast<std::size_t>(i)].y,
+                     backRim[static_cast<std::size_t>(next)].x,
+                     backRim[static_cast<std::size_t>(next)].y,
+                     0.70f + facing * 0.55f,
+                     rgba(0.88f, 0.78f, 1.0f, 0.58f),
+                     (0.012f + facing * 0.034f) * sideAmount * opacity);
         }
     }
 }
 
-void drawStarFaceFacets(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity) {
+void drawStarFaceFacets(const core::Rect& visual, float yaw, float pitch, float pressed, float opacity, float spinAngle) {
     if (opacity <= 0.001f) {
         return;
     }
 
     const auto facets = starFacetPoints(visual);
-    const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f));
+    const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f, spinAngle));
     const auto front = projectStarFacets(facets, matrix);
     const core::Vec2 center = projectPoint(matrix, {visual.x + visual.width * 0.5f, visual.y + visual.height * 0.5f});
-    const core::Vec3 light = normalize3({-0.46f + yaw * 0.20f, -0.74f - pitch * 0.12f, 1.0f});
+    const float rotationY = starRotationY(yaw, spinAngle);
+    const core::Vec3 light = normalize3({-0.46f + std::sin(rotationY) * 0.20f, -0.74f - pitch * 0.12f, 1.0f});
 
     for (int i = 0; i < kStarFacetPointCount; ++i) {
         const int next = (i + 1) % kStarFacetPointCount;
         const float midAngle = -kPi * 0.5f + (static_cast<float>(i) + 0.5f) * (kPi / 5.0f);
         const bool outerFacet = (i % 2) == 0;
-        const core::Vec3 facetNormal = normalize3({std::cos(midAngle) * (outerFacet ? 0.52f : 0.34f) - yaw * 0.20f,
+        const core::Vec3 facetNormal = normalize3({std::cos(midAngle) * (outerFacet ? 0.52f : 0.34f) - std::sin(rotationY) * 0.20f,
                                                    std::sin(midAngle) * (outerFacet ? 0.52f : 0.34f) + pitch * 0.16f,
                                                    1.02f});
         const float lit = std::clamp(dot3(facetNormal, light) * 0.5f + 0.5f, 0.0f, 1.0f);
@@ -2739,11 +3229,12 @@ void drawStarFace(core::render::RenderBackend::TextureHandle handle,
                   float yaw,
                   float pitch,
                   float pressed,
-                  float opacity) {
+                  float opacity,
+                  float spinAngle) {
     if (handle == nullptr || opacity <= 0.001f) {
         return;
     }
-    const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f));
+    const core::TransformMatrix matrix = matrixForTransform(visual, starSurfaceTransform(yaw, pitch, pressed, 0.0f, spinAngle));
     drawTextureQuadMatrix(handle,
                           visual.x,
                           visual.y,
@@ -2762,12 +3253,31 @@ void drawStarFace(core::render::RenderBackend::TextureHandle handle,
                           0.0f);
 }
 
+float premiumStarSpinAngle(const PanelState& state) {
+    float spinAngle = 0.0f;
+    if (state.starEntrySpinTime > 0.0f) {
+        const float progress = 1.0f - std::clamp(state.starEntrySpinTime / kStarEntrySpinDuration, 0.0f, 1.0f);
+        const float eased = smoothstep(0.0f, 1.0f, progress);
+        spinAngle += eased * kPi * 2.0f;
+    } else {
+        spinAngle += std::sin(state.starIdleTime * 0.54f) * 0.070f;
+    }
+    return spinAngle;
+}
+
 void renderPremiumStarStage(PanelState& state, float contentX, float contentW, float stageY, float opacity) {
     const core::Color accent = pageAccent(2);
     const core::Rect stage = premiumStarStageRect(contentX, contentW, stageY);
     const core::Rect visual = premiumStarVisualRect(contentX, contentW, stageY);
     const float pressed = state.starPressAmount;
     const float pulse = std::sin(state.launchTime * 2.1f) * 0.5f + 0.5f;
+    const float spinAngle = premiumStarSpinAngle(state);
+    const float entryProgress = state.starEntrySpinTime > 0.0f
+        ? 1.0f - std::clamp(state.starEntrySpinTime / kStarEntrySpinDuration, 0.0f, 1.0f)
+        : 1.0f;
+    const float entryLift = state.starEntrySpinTime > 0.0f ? std::sin(entryProgress * kPi) : 0.0f;
+    const float driftYaw = state.starYaw + std::sin(spinAngle) * 0.018f;
+    const float driftPitch = state.starPitch + std::cos(spinAngle * 0.7f) * 0.012f - entryLift * 0.050f;
 
     core::Gradient stageGradient;
     stageGradient.enabled = true;
@@ -2784,7 +3294,7 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
              rgba(1.0f, 1.0f, 1.0f, 0.026f * opacity),
              {1.0f, rgba(1.0f, 1.0f, 1.0f, 0.044f * opacity)});
 
-    drawCenteredStarGlow(visual, state.starYaw, state.starPitch, pressed, pulse, opacity);
+    drawCenteredStarGlow(visual, driftYaw, driftPitch, pressed, pulse, opacity);
 
     for (int i = 0; i < 28; ++i) {
         const float seed = static_cast<float>(i) * 17.0f + 3.0f;
@@ -2792,8 +3302,8 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
         const float px = stage.x + 34.0f + hash01(seed) * (stage.width - 68.0f);
         const float py = stage.y + 38.0f + hash01(seed + 9.0f) * (stage.height - 86.0f);
         const float twinkle = 0.5f + 0.5f * std::sin(state.launchTime * (1.4f + hash01(seed + 4.0f) * 2.8f) + seed);
-        const float driftX = state.starYaw * (5.0f + depth * 18.0f);
-        const float driftY = -state.starPitch * (4.0f + depth * 12.0f);
+        const float driftX = driftYaw * (5.0f + depth * 18.0f) + std::sin(spinAngle + depth) * 1.6f;
+        const float driftY = -driftPitch * (4.0f + depth * 12.0f);
         const float size = 0.9f + hash01(seed + 2.0f) * 3.9f;
         const float op = (0.12f + depth * 0.08f) * opacity;
         drawPremiumStarParticle(px + driftX,
@@ -2806,46 +3316,35 @@ void renderPremiumStarStage(PanelState& state, float contentX, float contentW, f
     for (int i = 0; i < 10; ++i) {
         const float seed = 100.0f + static_cast<float>(i) * 13.0f;
         const float depth = 0.45f + hash01(seed + 6.0f) * 0.80f;
-        const float x = stage.x + 56.0f + hash01(seed) * (stage.width - 112.0f) + state.starYaw * (7.0f + depth * 15.0f);
-        const float y = stage.y + 34.0f + hash01(seed + 2.0f) * (stage.height - 110.0f) - state.starPitch * (5.0f + depth * 8.0f);
+        const float x = stage.x + 56.0f + hash01(seed) * (stage.width - 112.0f) + driftYaw * (7.0f + depth * 15.0f);
+        const float y = stage.y + 34.0f + hash01(seed + 2.0f) * (stage.height - 110.0f) - driftPitch * (5.0f + depth * 8.0f);
         const float h = 7.0f + hash01(seed + 3.0f) * 26.0f;
         drawStarDustStreak(x, y, h, (0.045f + hash01(seed + 4.0f) * 0.070f) * opacity, state.launchTime * (0.70f + hash01(seed + 5.0f) * 0.60f) + seed);
     }
 
-    shadePremiumStar(state.starTexture, state.starPitch, state.starYaw, state.launchTime, state.pressedStar);
-    const bool starTextureReady = state.starTexture.handle != nullptr && state.starTexture.drawHoldFrames <= 0;
+    drawSafeStarGlow(visual.x + visual.width * 0.18f + driftYaw * 14.0f,
+                     visual.y + visual.height * 0.69f + driftPitch * 8.0f,
+                     visual.width * 0.62f,
+                     visual.height * 0.12f,
+                     32.0f,
+                     rgba(0.58f, 0.48f, 0.86f, 0.012f + pressed * 0.007f),
+                     opacity);
+    drawPremiumStarMeshModel(visual, driftYaw, driftPitch, pressed, opacity, spinAngle, state.launchTime);
 
-    if (starTextureReady) {
-        drawSafeStarGlow(visual.x + visual.width * 0.18f + state.starYaw * 14.0f,
-                         visual.y + visual.height * 0.69f + state.starPitch * 8.0f,
-                         visual.width * 0.62f,
-                         visual.height * 0.12f,
-                         32.0f,
-                         rgba(0.58f, 0.48f, 0.86f, 0.012f + pressed * 0.007f),
-                         opacity);
-        drawStarBackVolume(visual, state.starYaw, state.starPitch, pressed, opacity);
-        drawStarExtrudedSides(visual, state.starYaw, state.starPitch, pressed, opacity);
-        drawStarFace(state.starTexture.handle, visual, state.starYaw, state.starPitch, pressed, opacity);
-        drawStarFaceFacets(visual, state.starYaw, state.starPitch, pressed, opacity);
-    }
-    if (state.starTexture.drawHoldFrames > 0) {
-        --state.starTexture.drawHoldFrames;
-    }
-
-    drawStarSparkle(visual.x + visual.width * (0.58f + state.starYaw * 0.08f),
-                    visual.y + visual.height * (0.31f + state.starPitch * 0.06f),
+    drawStarSparkle(visual.x + visual.width * (0.58f + driftYaw * 0.08f),
+                    visual.y + visual.height * (0.31f + driftPitch * 0.06f),
                     13.5f + pressed * 2.0f,
                     rgba(1.0f, 0.95f, 1.0f, 0.90f),
                     0.30f * opacity);
-    drawStarSparkle(visual.x + visual.width * 0.35f + state.starYaw * 12.0f,
-                    visual.y + visual.height * 0.27f + state.starPitch * 10.0f,
+    drawStarSparkle(visual.x + visual.width * 0.35f + driftYaw * 12.0f,
+                    visual.y + visual.height * 0.27f + driftPitch * 10.0f,
                     10.5f + pulse * 2.4f,
                     rgba(1.0f, 1.0f, 1.0f, 0.82f),
                     0.28f * opacity);
     drawTextFit(stage.x + 26.0f, stage.y + 20.0f, 190.0f, "PREMIUM STAR", 1.04f, tileText(), opacity, 0.78f);
     drawTextRight(stage.x + stage.width - 26.0f,
                   stage.y + 20.0f,
-                  state.pressedStar ? "FLOAT" : "DEPTH",
+                  state.starEntrySpinTime > 0.0f ? "SPIN" : (state.pressedStar ? "FLOAT" : "DEPTH"),
                   0.92f,
                   rgba(0.98f, 0.96f, 1.0f, 0.86f),
                   opacity);
@@ -3035,6 +3534,11 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
     const core::Rect demoSliderTrack = demoSliderRect(contentX + 30.0f, demoY0 + 342.0f, contentW - 60.0f);
     const core::Rect demoSliderHit = expandedRect(demoSliderTrack, 10.0f);
 
+    if (state.selected == 2) {
+        state.starIdleTime += deltaSeconds;
+        state.starEntrySpinTime = std::max(0.0f, state.starEntrySpinTime - deltaSeconds);
+    }
+
     if (pointer.pressedThisFrame) {
         clearPointerCaptures(state);
 
@@ -3127,6 +3631,7 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
 
     if (state.selected == 2) {
         if (pointer.down && state.capturedStar) {
+            state.starEntrySpinTime = 0.0f;
             const float centerX = starVisualRect.x + starVisualRect.width * 0.5f;
             const float centerY = starVisualRect.y + starVisualRect.height * 0.5f;
             const float relX = std::clamp(static_cast<float>(pointer.x - centerX) / (starHitRect.width * 0.5f), -1.0f, 1.0f);
@@ -3135,8 +3640,15 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
             state.starTargetPitch = std::clamp(kStarRestPitch - relY * 0.52f, -0.62f, 0.42f);
             interacting = true;
         } else if (!pointer.down) {
-            state.starTargetYaw = approach(state.starTargetYaw, kStarRestYaw, deltaSeconds, 1.45f);
-            state.starTargetPitch = approach(state.starTargetPitch, kStarRestPitch, deltaSeconds, 1.45f);
+            if (state.starEntrySpinTime > 0.0f) {
+                state.starTargetYaw = approach(state.starTargetYaw, kStarRestYaw, deltaSeconds, 2.45f);
+                state.starTargetPitch = approach(state.starTargetPitch, kStarRestPitch, deltaSeconds, 2.45f);
+            } else {
+                const float idleYaw = kStarRestYaw + std::sin(state.starIdleTime * 0.62f) * 0.092f;
+                const float idlePitch = kStarRestPitch + std::sin(state.starIdleTime * 0.50f + 1.4f) * 0.056f;
+                state.starTargetYaw = approach(state.starTargetYaw, idleYaw, deltaSeconds, 1.35f);
+                state.starTargetPitch = approach(state.starTargetPitch, idlePitch, deltaSeconds, 1.35f);
+            }
         }
     }
 
@@ -3155,10 +3667,22 @@ void handleInput(PanelState& state, core::window::Handle window, float deltaSeco
             interacting = true;
         }
         if (pointer.releasedThisFrame && state.capturedNav == i && contains(navRect(i), pointer.x, pointer.y)) {
+            const int previousPage = state.selected;
             state.selected = i;
             state.targetScroll = 0.0f;
             state.contentScroll = 0.0f;
             state.pressedStar = false;
+            if (i == 2 && !state.starStageSeen) {
+                state.starStageSeen = true;
+                state.starEntrySpinTime = kStarEntrySpinDuration;
+                state.starIdleTime = 0.0f;
+                state.starTargetYaw = kStarRestYaw;
+                state.starTargetPitch = kStarRestPitch;
+                state.starYawVelocity = 0.0f;
+                state.starPitchVelocity = 0.0f;
+            } else if (previousPage != 2 && i == 2) {
+                state.starIdleTime = 0.0f;
+            }
             interacting = true;
         }
     }
